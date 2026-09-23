@@ -1,0 +1,5 @@
+httpx
+pillow
+pyyaml
+keyboard ; extra == "hotkey"
+pygetwindow ; sys_platform == "win32"

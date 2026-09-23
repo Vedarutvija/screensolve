@@ -1,0 +1,19 @@
+# ScreenSolve agent config
+
+# Where the server is running (change if you deploy the server elsewhere)
+server_url: https://screensolve-wwpbqn.drytis.dev
+
+# How captures are triggered:
+#   periodic = capture automatically every `interval` seconds (recommended —
+#              no hotkey/permissions needed; unchanged screens are skipped)
+#   hotkey   = capture only when you press the `hotkey` combination
+mode: periodic
+
+# Seconds between captures in periodic mode
+interval: 30
+
+# Global hotkey (only used when mode: hotkey)
+hotkey: ctrl+alt+s
+
+# "screen" = full primary display, "window" = active window only
+capture: screen
