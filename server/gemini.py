@@ -1,11 +1,16 @@
 import base64
 import json
-import os
 import re
 
 import httpx
 
-from server.config import GEMINI_API_KEY, GEMINI_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, VISION_MODEL
+from server.config import (
+    GEMINI_API_KEY,
+    GEMINI_MODEL,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
+    VISION_MODEL,
+)
 
 PROMPT = """You are an expert programming tutor.
 
@@ -128,3 +133,64 @@ def analyze_image(image_bytes: bytes, mime_type: str = "image/png") -> dict:
     if OPENAI_API_KEY:
         return _analyze_openai(image_bytes, mime_type)
     raise RuntimeError("No vision API key configured (set GEMINI_API_KEY or OPENAI_API_KEY)")
+
+
+MULTI_PREFIX = """These are {n} screenshots of the SAME screen, taken while the user
+scrolled through one coding question (part 1, then part 2, ... in order).
+Read them IN ORDER and stitch the content together into one complete question
+before solving. Overlapping regions should be merged, not re-solved.
+
+"""
+
+
+def analyze_images_multi(image_parts: list[bytes], mime_type: str = "image/png") -> dict:
+    """Analyze several screenshots (scroll parts) as ONE combined question."""
+    if not image_parts:
+        raise ValueError("no images")
+    if len(image_parts) == 1:
+        return analyze_image(image_parts[0], mime_type)
+    prompt = MULTI_PREFIX.format(n=len(image_parts)) + PROMPT
+
+    if GEMINI_API_KEY:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        contents: list = [
+            types.Part.from_bytes(data=p, mime_type=mime_type) for p in image_parts
+        ]
+        contents.append(prompt)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.2,
+                max_output_tokens=8192,
+            ),
+        )
+        return _extract_json(response.text or "")
+
+    if OPENAI_API_KEY:
+        content: list = [{"type": "text", "text": prompt}]
+        for p in image_parts:
+            b64 = base64.b64encode(p).decode()
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{b64}"},
+            })
+        resp = httpx.post(
+            f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={
+                "model": VISION_MODEL,
+                "temperature": 0.2,
+                "max_tokens": 8192,
+                "messages": [{"role": "user", "content": content}],
+            },
+            timeout=300,
+        )
+        resp.raise_for_status()
+        return _extract_json(resp.json()["choices"][0]["message"]["content"])
+
+    raise RuntimeError("No vision API key configured")

@@ -1,13 +1,17 @@
 # ScreenSolve agent config
 
-# Where the server is running (change if you deploy the server elsewhere)
+# Where the server is running
 server_url: https://screensolve-wwpbqn.drytis.dev
 
 # How captures are triggered:
-#   periodic = capture automatically every `interval` seconds (recommended —
-#              no hotkey/permissions needed; unchanged screens are skipped)
-#   hotkey   = capture only when you press the `hotkey` combination
-mode: periodic
+#   telegram = capture only when you send 'c' in the Telegram bot chat
+#              (send 's' there to solve all captured parts as one question)  ← recommended
+#   periodic = capture automatically every `interval` seconds
+#   hotkey   = capture when you press the `hotkey` combination
+mode: telegram
+
+# How often (seconds) the agent checks for Telegram commands (telegram mode)
+poll_seconds: 1.5
 
 # Seconds between captures in periodic mode
 interval: 30

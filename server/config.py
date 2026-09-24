@@ -26,6 +26,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4o-mini")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+STT_MODEL = os.getenv("STT_MODEL", "whisper-1")
 PORT = int(os.getenv("PORT", "8000"))
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)

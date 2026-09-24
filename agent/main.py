@@ -23,10 +23,11 @@ CONFIG_PATH = Path(__file__).parent / "config.yaml"
 def load_config() -> dict:
     defaults = {
         "server_url": "https://screensolve-wwpbqn.drytis.dev",
-        "mode": "periodic",  # "hotkey" = capture on keypress, "periodic" = auto every interval
+        "mode": "telegram",  # telegram = capture only when 'c' sent in the bot chat
         "interval": 30,  # seconds between captures in periodic mode
         "hotkey": "ctrl+alt+s",
         "capture": "screen",  # "screen" (full primary) or "window" (active window)
+        "poll_seconds": 1.5,  # how often to check for Telegram commands
     }
     if CONFIG_PATH.exists():
         defaults.update(yaml.safe_load(CONFIG_PATH.read_text()) or {})
@@ -122,6 +123,34 @@ def png_hash(png: bytes) -> str:
     return hashlib.sha1(png).hexdigest()
 
 
+def run_telegram_mode(cfg: dict) -> None:
+    """Poll the server for 'capture' commands; upload as session part. No analysis here."""
+    poll_s = max(0.5, float(cfg.get("poll_seconds", 1.5)))
+    base = cfg["server_url"].rstrip("/")
+    log(f"Telegram mode: waiting for 'c' commands from the bot chat. Ctrl+C to quit.")
+    while True:
+        try:
+            r = httpx.get(f"{base}/api/agent/poll", params={"agent_id": "default"}, timeout=10)
+            if r.json().get("command") == "capture":
+                log("command received — capturing screen…")
+                png = capture_screen(cfg.get("capture", "screen"))
+                up = httpx.post(
+                    f"{base}/api/agent/capture",
+                    files={"file": ("part.png", png, "image/png")},
+                    timeout=60,
+                )
+                if up.status_code == 200:
+                    d = up.json()
+                    log(f"part #{d['parts']} stored in session {d['session_id']}")
+                else:
+                    log(f"upload failed: HTTP {up.status_code}")
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log(f"poll error: {e}")
+        time.sleep(poll_s)
+
+
 def run_periodic(cfg: dict) -> None:
     interval = max(5, int(cfg.get("interval", 30)))
     log(f"Periodic mode: capturing every {interval}s. Ctrl+C to quit.")
@@ -145,7 +174,14 @@ def run_periodic(cfg: dict) -> None:
 
 def main() -> int:
     cfg = load_config()
-    mode = cfg.get("mode", "periodic")
+    mode = cfg.get("mode", "telegram")
+
+    if mode == "telegram":
+        try:
+            run_telegram_mode(cfg)
+        except KeyboardInterrupt:
+            log("bye")
+        return 0
 
     if mode == "periodic":
         try:

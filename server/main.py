@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from server.database import Base, engine
+from server.routers import agent as agent_router
 from server.routers import captures
 from server import telegram
 
@@ -20,6 +21,7 @@ app.add_middleware(
 )
 
 app.include_router(captures.router)
+app.include_router(agent_router.router)
 
 
 @app.get("/health")

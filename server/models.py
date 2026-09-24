@@ -6,10 +6,20 @@ from sqlalchemy import Column, DateTime, Integer, JSON, String, Text
 from server.database import Base
 
 
+class CaptureSession(Base):
+    __tablename__ = "capture_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    status = Column(String(32), default="open", index=True)  # open|solving|solved
+    created_at = Column(DateTime, default=datetime.utcnow)
+    solved_at = Column(DateTime, nullable=True)
+
+
 class Capture(Base):
     __tablename__ = "captures"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(Integer, nullable=True, index=True)
     image_path = Column(String(512), nullable=False)
     status = Column(String(32), default="pending", index=True)
     problem_statement = Column(Text, nullable=True)

@@ -73,6 +73,14 @@ def _run_analysis(capture_id: int) -> None:
                     # then the full solution
                     telegram.broadcast_photo(db, raw, caption=f"📸 capture — {cap.id}")
                     telegram.broadcast(db, telegram.format_solution(cap))
+                    # remember in chat history for follow-ups
+                    for tchat in db.query(telegram.TelegramChat).all():
+                        telegram.question_chat_id_holder["chat_id"] = tchat.chat_id
+                        telegram.chat_history.add(
+                            tchat.chat_id, "assistant",
+                            f"Solution for capture #{cap.id}: "
+                            + (cap.problem_statement or "")[:500],
+                        )
                 elif cap.status == "no_question":
                     # possible 'rest of the problem' continuation: a solved capture
                     # shortly before this one means the user may have scrolled
