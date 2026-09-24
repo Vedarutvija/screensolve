@@ -59,7 +59,13 @@ def open_session(db: Session) -> CaptureSession:
 @router.get("/poll")
 def poll(agent_id: str = "default"):
     with _lock:
-        entry = _pending.pop(agent_id, None)
+        entry = _pending.get(agent_id)
+        if entry and datetime.utcnow().timestamp() - entry["issued_at"] > COMMAND_TTL:
+            # stale command (agent was offline when issued) — discard, never deliver
+            del _pending[agent_id]
+            entry = None
+        if entry:
+            del _pending[agent_id]
     if entry:
         return {"command": entry["command"]}
     return {"command": None}
