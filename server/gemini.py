@@ -142,6 +142,12 @@ before solving. Overlapping regions should be merged, not re-solved.
 
 """
 
+JSON_ONLY_SUFFIX = """
+
+CRITICAL OUTPUT RULE: your entire response must be ONE raw JSON object and
+nothing else — no markdown fences, no prose before or after, no explanation.
+Start your response with { and end it with }."""
+
 
 def analyze_images_multi(image_parts: list[bytes], mime_type: str = "image/png") -> dict:
     """Analyze several screenshots (scroll parts) as ONE combined question."""
@@ -149,7 +155,27 @@ def analyze_images_multi(image_parts: list[bytes], mime_type: str = "image/png")
         raise ValueError("no images")
     if len(image_parts) == 1:
         return analyze_image(image_parts[0], mime_type)
+
     prompt = MULTI_PREFIX.format(n=len(image_parts)) + PROMPT
+    last_err = None
+    for attempt in range(3):
+        try:
+            if attempt == 1:
+                prompt = MULTI_PREFIX.format(n=len(image_parts)) + PROMPT + JSON_ONLY_SUFFIX
+            return _analyze_multi_once(image_parts, mime_type, prompt,
+                                       max_tokens=8192 if attempt < 2 else 16384)
+        except (ValueError, KeyError) as e:
+            last_err = e
+            continue
+    raise RuntimeError(
+        f"The vision model could not produce a structured answer after 3 attempts "
+        f"(last error: {last_err}). Try fewer parts or send s again."
+    )
+
+
+def _analyze_multi_once(image_parts: list[bytes], mime_type: str, prompt: str,
+                        max_tokens: int) -> dict:
+    import logging
 
     if GEMINI_API_KEY:
         from google import genai
@@ -166,7 +192,7 @@ def analyze_images_multi(image_parts: list[bytes], mime_type: str = "image/png")
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.2,
-                max_output_tokens=8192,
+                max_output_tokens=max_tokens,
             ),
         )
         return _extract_json(response.text or "")
@@ -185,12 +211,16 @@ def analyze_images_multi(image_parts: list[bytes], mime_type: str = "image/png")
             json={
                 "model": VISION_MODEL,
                 "temperature": 0.2,
-                "max_tokens": 8192,
+                "max_tokens": max_tokens,
                 "messages": [{"role": "user", "content": content}],
             },
             timeout=300,
         )
         resp.raise_for_status()
-        return _extract_json(resp.json()["choices"][0]["message"]["content"])
+        text = resp.json()["choices"][0]["message"]["content"] or ""
+        logging.getLogger("screensolve").warning(
+            "multi-image response len=%s head=%r", len(text), text[:150]
+        )
+        return _extract_json(text)
 
     raise RuntimeError("No vision API key configured")

@@ -239,37 +239,31 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
     try:
         if cmd == "c":
             agent_api.issue_capture_command()
-            # wait for the agent to pick it up and upload a part (or time out)
+            # wait for the agent to upload a NEW part (id must increase past
+            # whatever existed when the command was issued)
             import time as _time
 
+            from server.models import Capture as _Cap
+
+            last_id_before = db.query(_Cap.id).order_by(_Cap.id.desc()).first()
+            last_id_before = last_id_before[0] if last_id_before else 0
+
             waited = 0.0
-            parts_before = 0
-            open_s = db.query(CaptureSession).filter_by(status="open").first()
-            if open_s:
-                parts_before = (
-                    db.query(Capture).filter_by(session_id=open_s.id, status="captured").count()
-                )
+            new_part = None
             while waited < 18:
                 _time.sleep(2)
                 waited += 2
                 db.expire_all()
-                open_s = db.query(CaptureSession).filter_by(status="open").first()
-                parts_now = 0
-                if open_s:
-                    parts_now = (
-                        db.query(Capture)
-                        .filter_by(session_id=open_s.id, status="captured")
-                        .count()
-                    )
-                if parts_now > parts_before or not agent_api.command_pending():
+                new_cap = db.query(_Cap).filter(_Cap.id > last_id_before).first()
+                if new_cap:
+                    new_part = new_cap
+                    # small grace so the echo photo lands too
+                    _time.sleep(1)
                     break
-            db.expire_all()
-            open_s = db.query(CaptureSession).filter_by(status="open").first()
-            parts = (
-                db.query(Capture).filter_by(session_id=open_s.id, status="captured").count()
-                if open_s else 0
-            )
-            if parts > parts_before:
+            if new_part:
+                parts = (
+                    db.query(Capture).filter_by(status="captured").count()
+                )
                 send_message(
                     chat_id,
                     f"📸 Captured — the screenshot is above (part {parts}).\n"
