@@ -17,7 +17,15 @@ Look at the screenshot and determine whether a clear coding question, programmin
 
 If there is genuinely NO coding-related content on screen (e.g. a blank desktop, social media, unrelated documents), set has_question=false. Otherwise has_question=true — even if the problem is only implied by a search query or error.
 
-When has_question=true, solve it step-by-step with an ADDITIVE pattern: each subsequent step ACCUMULATES the previous steps — it repeats all code built so far, expanded or restructured, so by the final step the full working solution is complete. Every element of solution_steps must contain a "step" explanation plus "code" holding the cumulative code so far.
+When has_question=true, solve it like a LIVE coding interview (TopTal style): think out loud, one small concept at a time, explaining WHY before writing anything.
+
+STRICT RULES for solution_steps:
+1. GRANULARITY: each step introduces exactly ONE concept — e.g. "define the function signature", "create an empty dict/list", "handle the nested-dict case", "handle the list case", "handle leaf values", "wire up the entry point", "handle edge cases". Never bundle two ideas into one step.
+2. REASONING FIRST: every step's explanation must start with WHY we are doing this before what. Example: "We create an empty dictionary here because we need a single place to collect flattened key-value pairs as the recursion walks the structure — every branch will write into it." Then a sentence on WHAT this step adds.
+3. ADDITIVE CODE: each step's "code" contains the ENTIRE code accumulated so far, with this step's addition highlighted by a brief inline comment. The final step's code must be the complete working solution.
+4. NARRATE like a tutor talking while typing: "let's...", "now we...", "notice that...".
+5. Keep it to at most 10 steps; if the solution is trivial, fewer steps is fine.
+6. After the code in optimized_code, keep the code clean (final version without the narration comments).
 
 Return ONLY a JSON object (no markdown fences) with exactly these keys:
 {
@@ -25,7 +33,7 @@ Return ONLY a JSON object (no markdown fences) with exactly these keys:
   "problem_statement": "clear restatement of the problem/question, or null",
   "user_attempt": "any partial code or working the user already wrote, verbatim, or null",
   "solution_steps": [
-    {"step": "short explanation of what this step adds and why",
+    {"step": "WHY this step exists first (reasoning), then WHAT it adds — tutor voice",
      "code": "the ENTIRE code accumulated so far, including everything from previous steps plus this step's addition"}
   ],
   "optimized_code": "the complete, final, optimized, runnable Python solution (same as the last step's code, cleaned up), or null",
@@ -34,12 +42,17 @@ Return ONLY a JSON object (no markdown fences) with exactly these keys:
   "notes": "feedback on the user's attempt/next steps (bugs, inefficiencies, improvements), or null"
 }
 
-Example of the additive pattern (steps shown abbreviated):
-step 1: lets convert the given integer to str
+Example of the additive, reasoning-first pattern (steps shown abbreviated):
+step 1: "We start by converting the given integer to a string, because binary
+gaps are about the characters of the representation, not the number's value —
+string indexing lets us scan runs of zeros easily."
   code: N = 10010001\\nn = str(N)
-step 2: lets define a function to find the gap
+step 2: "Now we define a function to hold the gap-finding logic — wrapping it
+in a function keeps the scan reusable and testable instead of loose script
+code."
   code: N = 10010001\\nn = str(N)\\ndef find_gap(n):
-step 3: lets initialize empty string for appending the substrings
+step 3: "We create an empty string here because we need a place to build up
+each run of bits as we walk through them character by character."
   code: N = 10010001\\nn = str(N)\\ndef find_gap(n):\\n    new_string = ""
 (each step repeats everything before it, then adds)
 
@@ -75,6 +88,7 @@ def _analyze_gemini(image_bytes: bytes, mime_type: str) -> dict:
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
             temperature=0.2,
+            max_output_tokens=8192,
         ),
     )
     return _extract_json(response.text or "")
@@ -88,6 +102,7 @@ def _analyze_openai(image_bytes: bytes, mime_type: str) -> dict:
         json={
             "model": VISION_MODEL,
             "temperature": 0.2,
+            "max_tokens": 8192,
             "messages": [
                 {
                     "role": "user",
