@@ -8,3 +8,4 @@ pillow
 google-genai
 httpx
 pyyaml
+python-dotenv

@@ -11,6 +11,7 @@ from server.config import GEMINI_API_KEY, OPENAI_API_KEY, UPLOAD_DIR
 from server.database import get_db
 from server.gemini import analyze_image
 from server.models import Capture
+from server import telegram
 
 import io
 
@@ -65,6 +66,11 @@ def _run_analysis(capture_id: int) -> None:
             cap.space_complexity = result.get("space_complexity")
             cap.notes = result.get("notes")
         db.commit()
+        if cap.status == "solved" and telegram.enabled():
+            try:
+                telegram.broadcast(db, telegram.format_solution(cap))
+            except Exception:
+                pass  # delivery must never break analysis
     finally:
         db.close()
 

@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server.database import Base, engine
 from server.routers import captures
+from server import telegram
 
 Base.metadata.create_all(bind=engine)
 
@@ -24,6 +25,9 @@ app.include_router(captures.router)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+telegram.start_bot()
 
 
 DASH = Path(__file__).resolve().parent.parent / "dashboard"

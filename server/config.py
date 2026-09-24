@@ -1,5 +1,13 @@
 import os
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv("/workspace/.env")
+except ImportError:
+    pass
+
+
 def _default_db_url() -> str:
     host = os.getenv("DB_HOST", "127.0.0.1")
     port = os.getenv("DB_PORT", "3306")
@@ -17,6 +25,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4o-mini")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 PORT = int(os.getenv("PORT", "8000"))
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
