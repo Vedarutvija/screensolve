@@ -31,6 +31,21 @@ def issue_capture_command(agent_id: str = "default") -> bool:
     return True
 
 
+COMMAND_TTL = 20  # seconds before an unclaimed command expires
+
+
+def command_pending(agent_id: str = "default") -> bool:
+    """True while a command is waiting to be picked up; expires if agent never polls."""
+    with _lock:
+        entry = _pending.get(agent_id)
+        if not entry:
+            return False
+        if datetime.utcnow().timestamp() - entry["issued_at"] > COMMAND_TTL:
+            del _pending[agent_id]
+            return False
+        return True
+
+
 def open_session(db: Session) -> CaptureSession:
     sess = db.query(CaptureSession).filter_by(status="open").first()
     if not sess:
@@ -75,7 +90,27 @@ async def agent_capture(
     db.add(cap)
     db.commit()
     db.refresh(cap)
-    return {"id": cap.id, "session_id": sess.id, "parts": _part_count(db, sess.id)}
+    parts = _part_count(db, sess.id)
+
+    # echo the captured screenshot to all linked Telegram chats
+    background.add_task(_echo_part, data, parts)
+
+    return {"id": cap.id, "session_id": sess.id, "parts": parts}
+
+
+def _echo_part(png: bytes, part_no: int) -> None:
+    from server import telegram
+    from server.database import SessionLocal
+
+    if not telegram.enabled():
+        return
+    db = SessionLocal()
+    try:
+        telegram.broadcast_photo(db, png, caption=f"📸 part {part_no} captured")
+    except Exception:
+        pass
+    finally:
+        db.close()
 
 
 def _part_count(db: Session, session_id: int) -> int:

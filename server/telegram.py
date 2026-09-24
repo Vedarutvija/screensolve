@@ -239,22 +239,63 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
     try:
         if cmd == "c":
             agent_api.issue_capture_command()
-            open_n = db.query(CaptureSession).filter_by(status="open").first()
+            # wait for the agent to pick it up and upload a part (or time out)
+            import time as _time
+
+            waited = 0.0
+            parts_before = 0
+            open_s = db.query(CaptureSession).filter_by(status="open").first()
+            if open_s:
+                parts_before = (
+                    db.query(Capture).filter_by(session_id=open_s.id, status="captured").count()
+                )
+            while waited < 18:
+                _time.sleep(2)
+                waited += 2
+                db.expire_all()
+                open_s = db.query(CaptureSession).filter_by(status="open").first()
+                parts_now = 0
+                if open_s:
+                    parts_now = (
+                        db.query(Capture)
+                        .filter_by(session_id=open_s.id, status="captured")
+                        .count()
+                    )
+                if parts_now > parts_before or not agent_api.command_pending():
+                    break
+            db.expire_all()
+            open_s = db.query(CaptureSession).filter_by(status="open").first()
             parts = (
-                db.query(Capture).filter_by(session_id=open_n.id, status="captured").count()
-                if open_n else 0
+                db.query(Capture).filter_by(session_id=open_s.id, status="captured").count()
+                if open_s else 0
             )
-            send_message(
-                chat_id,
-                "📸 Capturing your screen…\n"
-                + (f"Session has {parts} part(s) so far. " if parts else "")
-                + "Scroll and send c again for more parts, or s to solve.",
-            )
+            if parts > parts_before:
+                send_message(
+                    chat_id,
+                    f"📸 Captured — the screenshot is above (part {parts}).\n"
+                    "Scroll and send c for more parts, or s to solve.",
+                )
+            else:
+                send_message(
+                    chat_id,
+                    "⚠️ No capture arrived — is the agent running on your computer?\n"
+                    "Start it there with: python3 agent/main.py",
+                )
 
         elif cmd == "s":
             sess = db.query(CaptureSession).filter_by(status="open").first()
             if not sess:
-                send_message(chat_id, "No capture session open. Send c first to capture your screen.")
+                # maybe the session was already solved/cleared — check for any
+                # recently captured parts and tell the truth
+                last = db.query(Capture).filter_by(status="captured").order_by(Capture.id.desc()).first()
+                if last and last.session_id:
+                    send_message(
+                        chat_id,
+                        f"That session was already solved. Send c to start a new capture"
+                        f" (your last solution is above — capture #{last.id}).",
+                    )
+                else:
+                    send_message(chat_id, "No capture session open. Send c first to capture your screen.")
                 return
             parts = db.query(Capture).filter_by(session_id=sess.id, status="captured").count()
             if not parts:
