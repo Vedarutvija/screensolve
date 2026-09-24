@@ -11,7 +11,7 @@ server_url: https://screensolve-wwpbqn.drytis.dev
 mode: telegram
 
 # How often (seconds) the agent checks for Telegram commands (telegram mode)
-poll_seconds: 1.5
+poll_seconds: 0.7
 
 # Seconds between captures in periodic mode
 interval: 30

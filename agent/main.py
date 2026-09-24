@@ -27,7 +27,7 @@ def load_config() -> dict:
         "interval": 30,  # seconds between captures in periodic mode
         "hotkey": "ctrl+alt+s",
         "capture": "screen",  # "screen" (full primary) or "window" (active window)
-        "poll_seconds": 1.5,  # how often to check for Telegram commands
+        "poll_seconds": 0.7,  # how often to check for Telegram commands (lower = snappier)
     }
     if CONFIG_PATH.exists():
         defaults.update(yaml.safe_load(CONFIG_PATH.read_text()) or {})
@@ -125,14 +125,15 @@ def png_hash(png: bytes) -> str:
 
 def run_telegram_mode(cfg: dict) -> None:
     """Poll the server for 'capture' commands; upload as session part. No analysis here."""
-    poll_s = max(0.5, float(cfg.get("poll_seconds", 1.5)))
+    poll_s = max(0.3, float(cfg.get("poll_seconds", 0.7)))
     base = cfg["server_url"].rstrip("/")
-    log(f"Telegram mode: waiting for 'c' commands from the bot chat. Ctrl+C to quit.")
+    log("TELEGRAM MODE — captures happen ONLY when you send 'c' in the bot chat.")
+    log("No automatic captures, no screen-change detection. Ctrl+C to quit.")
     while True:
         try:
             r = httpx.get(f"{base}/api/agent/poll", params={"agent_id": "default"}, timeout=10)
             if r.json().get("command") == "capture":
-                log("command received — capturing screen…")
+                log("command received — capturing NOW…")
                 png = capture_screen(cfg.get("capture", "screen"))
                 up = httpx.post(
                     f"{base}/api/agent/capture",
