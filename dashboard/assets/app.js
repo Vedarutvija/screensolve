@@ -18,6 +18,23 @@ function badge(status) {
   return `<span class="status ${status}">${status === "analyzing" || status === "pending" ? '<span class="spinner"></span>' : ""}${labels[status] || esc(status)}</span>`;
 }
 
+function stepsHTML(steps) {
+  // additive pattern: each step is {step, code} where code accumulates
+  let out = "", codeBuf = "";
+  for (const s of steps || []) {
+    let text, codeHtml = "";
+    if (typeof s === "object" && s !== null) {
+      text = s.step || "";
+      if (s.code) codeBuf = s.code;
+      codeHtml = `<pre><code class="language-python">${esc(codeBuf)}</code></pre>`;
+    } else {
+      text = String(s);
+    }
+    out += `<li>${esc(text)}${codeHtml}</li>`;
+  }
+  return out;
+}
+
 function cardHTML(c) {
   let body = "";
   if (c.status === "solved") {
@@ -27,7 +44,7 @@ function cardHTML(c) {
           ${c.time_complexity ? `<span class="badge">⏱ ${esc(c.time_complexity)}</span>` : ""}
           ${c.space_complexity ? `<span class="badge space">💾 ${esc(c.space_complexity)}</span>` : ""}
         </div>
-        ${c.solution_steps?.length ? `<div class="section"><h3>Approach</h3><ol class="steps">${c.solution_steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol></div>` : ""}
+        ${c.solution_steps?.length ? `<div class="section"><h3>Step-by-step build-up</h3><ol class="steps">${stepsHTML(c.solution_steps)}</ol></div>` : ""}
         ${c.optimized_code ? `<div class="section"><h3>Optimized solution</h3><pre><code class="language-python">${esc(c.optimized_code)}</code></pre></div>` : ""}
         ${c.user_attempt ? `<div class="section"><h3>Your attempt on screen</h3><div class="attempt">${esc(c.user_attempt)}</div></div>` : ""}
         ${c.notes ? `<div class="section"><h3>Feedback</h3><div class="notes">${esc(c.notes)}</div></div>` : ""}

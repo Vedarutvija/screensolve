@@ -7,28 +7,44 @@ import httpx
 
 from server.config import GEMINI_API_KEY, GEMINI_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, VISION_MODEL
 
-PROMPT = """You are an expert competitive-programming coach. Analyze the screenshot.
+PROMPT = """You are an expert programming tutor.
 
-Look at the screen content and decide:
-1. Does the screen contain a coding/algorithm problem statement, a question, or code the user is writing to solve something (Python expected)?
-2. If the user has written/partially written a solution, extract it.
+Look at the screenshot and determine whether a clear coding question, programming problem, error message, or code-related request is visible. Count ANY of these as a question:
+- a problem statement (LeetCode/HackerRank style or from notes)
+- a search query about how to do something in code (e.g. "nested json flatten python")
+- an error message or traceback the user is facing
+- code the user is writing/debugging toward a goal
 
-Then produce an OPTIMIZED step-by-step solution for Python.
+If there is genuinely NO coding-related content on screen (e.g. a blank desktop, social media, unrelated documents), set has_question=false. Otherwise has_question=true — even if the problem is only implied by a search query or error.
+
+When has_question=true, solve it step-by-step with an ADDITIVE pattern: each subsequent step ACCUMULATES the previous steps — it repeats all code built so far, expanded or restructured, so by the final step the full working solution is complete. Every element of solution_steps must contain a "step" explanation plus "code" holding the cumulative code so far.
 
 Return ONLY a JSON object (no markdown fences) with exactly these keys:
 {
   "has_question": true/false,
   "problem_statement": "clear restatement of the problem/question, or null",
   "user_attempt": "any partial code or working the user already wrote, verbatim, or null",
-  "solution_steps": ["ordered, concise steps explaining the approach and why it is optimal"],
-  "optimized_code": "complete, optimized, runnable Python solution with brief comments, or null",
+  "solution_steps": [
+    {"step": "short explanation of what this step adds and why",
+     "code": "the ENTIRE code accumulated so far, including everything from previous steps plus this step's addition"}
+  ],
+  "optimized_code": "the complete, final, optimized, runnable Python solution (same as the last step's code, cleaned up), or null",
   "time_complexity": "e.g. O(n log n), or null",
   "space_complexity": "e.g. O(n), or null",
-  "notes": "feedback on the user's attempt (bugs, inefficiencies, improvements), or null"
+  "notes": "feedback on the user's attempt/next steps (bugs, inefficiencies, improvements), or null"
 }
 
+Example of the additive pattern (steps shown abbreviated):
+step 1: lets convert the given integer to str
+  code: N = 10010001\\nn = str(N)
+step 2: lets define a function to find the gap
+  code: N = 10010001\\nn = str(N)\\ndef find_gap(n):
+step 3: lets initialize empty string for appending the substrings
+  code: N = 10010001\\nn = str(N)\\ndef find_gap(n):\\n    new_string = ""
+(each step repeats everything before it, then adds)
+
 Rules:
-- If there is NO question/problem/solution attempt on screen, return has_question=false and null for everything else.
+- Prefer Python solutions unless the screen clearly demands another language.
 - Prefer the most efficient approach; mention alternatives briefly in steps.
 - Do not invent problems that are not visible."""
 

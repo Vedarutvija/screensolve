@@ -66,8 +66,18 @@ def format_solution(capture) -> str:
     if capture.problem_statement:
         parts.append("\n<b>Problem:</b>\n" + e(capture.problem_statement))
     if capture.solution_steps:
-        steps = "\n".join(f"{i+1}. {e(s)}" for i, s in enumerate(capture.solution_steps))
-        parts.append("\n<b>Approach:</b>\n" + steps)
+        items = []
+        for i, s in enumerate(capture.solution_steps):
+            if isinstance(s, dict):
+                text = s.get("step") or ""
+                code = s.get("code")
+                if code:
+                    items.append(f"<b>step {i+1}.</b> {e(text)}\n<pre>{e(code)}</pre>")
+                else:
+                    items.append(f"<b>step {i+1}.</b> {e(text)}")
+            else:
+                items.append(f"<b>step {i+1}.</b> {e(str(s))}")
+        parts.append("\n<b>Approach (building up):</b>\n" + "\n\n".join(items))
     if capture.optimized_code:
         parts.append("\n<b>Optimized code:</b>\n<pre>" + e(capture.optimized_code) + "</pre>")
     badges = [b for b in (capture.time_complexity, capture.space_complexity) if b]
