@@ -5,7 +5,7 @@ server_url: https://screensolve-wwpbqn.drytis.dev
 
 # How captures are triggered:
 #   telegram = capture only when you send 'c' in the Telegram bot chat
-#              (send 's' there to solve all captured parts as one question)  ← recommended
+#              (send 's' there to solve all captured parts as one question)  <- recommended
 #   periodic = capture automatically every `interval` seconds
 #   hotkey   = capture when you press the `hotkey` combination
 mode: telegram

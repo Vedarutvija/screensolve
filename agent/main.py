@@ -30,7 +30,7 @@ def load_config() -> dict:
         "poll_seconds": 0.7,  # how often to check for Telegram commands (lower = snappier)
     }
     if CONFIG_PATH.exists():
-        defaults.update(yaml.safe_load(CONFIG_PATH.read_text()) or {})
+        defaults.update(yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {})
     return defaults
 
 
