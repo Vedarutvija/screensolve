@@ -66,9 +66,35 @@ def _run_analysis(capture_id: int) -> None:
             cap.space_complexity = result.get("space_complexity")
             cap.notes = result.get("notes")
         db.commit()
-        if cap.status == "solved" and telegram.enabled():
+        if telegram.enabled():
             try:
-                telegram.broadcast(db, telegram.format_solution(cap))
+                if cap.status == "solved":
+                    # send the screenshot first so the user sees WHICH screen was solved,
+                    # then the full solution
+                    telegram.broadcast_photo(db, raw, caption=f"📸 capture — {cap.id}")
+                    telegram.broadcast(db, telegram.format_solution(cap))
+                elif cap.status == "no_question":
+                    # possible 'rest of the problem' continuation: a solved capture
+                    # shortly before this one means the user may have scrolled
+                    from datetime import timedelta
+
+                    recent = (
+                        db.query(Capture)
+                        .filter(
+                            Capture.id != cap.id,
+                            Capture.status.in_(["solved", "analyzing", "pending"]),
+                            Capture.created_at >= cap.created_at - timedelta(minutes=5),
+                        )
+                        .count()
+                    )
+                    if recent:
+                        telegram.broadcast(
+                            db,
+                            "📸 New capture but no question on this screen.\n"
+                            "If this is the REST of the previous problem, capture again "
+                            "so both parts are on one screen (scroll so the earlier part "
+                            "is visible too) — I solve what's visible in one capture.",
+                        )
             except Exception:
                 pass  # delivery must never break analysis
     finally:

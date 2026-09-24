@@ -42,6 +42,22 @@ def send_message(chat_id: str, text: str) -> bool:
     return bool(ok and ok.get("ok"))
 
 
+def send_photo(chat_id: str, png: bytes, caption: str | None = None) -> bool:
+    if not enabled():
+        return False
+    try:
+        files = {"photo": ("capture.png", png, "image/png")}
+        data = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption[:1024]
+            data["parse_mode"] = "HTML"
+        r = httpx.post(f"{API}{TELEGRAM_BOT_TOKEN}/sendPhoto",
+                       data=data, files=files, timeout=60)
+        return r.status_code == 200 and r.json().get("ok")
+    except Exception:
+        return False
+
+
 def link_chat(db, chat_id, title=None) -> None:
     from datetime import datetime, timezone
 
@@ -56,6 +72,14 @@ def broadcast(db, text: str) -> int:
     sent = 0
     for chat in db.query(TelegramChat).all():
         if send_message(chat.chat_id, text):
+            sent += 1
+    return sent
+
+
+def broadcast_photo(db, png: bytes, caption: str | None = None) -> int:
+    sent = 0
+    for chat in db.query(TelegramChat).all():
+        if send_photo(chat.chat_id, png, caption):
             sent += 1
     return sent
 
