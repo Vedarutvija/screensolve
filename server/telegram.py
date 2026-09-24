@@ -2,6 +2,7 @@
 
 import base64
 import html
+import re
 import threading
 import time
 from datetime import datetime
@@ -177,9 +178,35 @@ FOLLOWUP_PROMPT = """You are ScreenSolve, a programming tutor chatting on Telegr
 Below is the recent conversation with this user, including solutions you delivered
 for screen captures. The user asks a follow-up question (typed or spoken).
 
-Answer concisely in plain text (Telegram HTML allowed: <b>, <code>, <pre>).
-Ground the answer in the recent solution when relevant — quote its steps/code.
-If there is no relevant capture context, answer generally and say so.
+FIRST decide the intent:
+A) The user asks for a CODE CHANGE or new implementation ("add X", "change it to Y",
+   "make it handle Z", "rewrite using W").
+B) Anything else — an explanation, a conceptual question, a complexity question, chat.
+
+For case A, answer in the ADDITIVE live-coding tutor style:
+- Split the change into granular steps; each step introduces exactly ONE concept.
+- Every step's explanation starts with WHY we do this before WHAT we add.
+- Each step's code block contains the ENTIRE code accumulated so far (previous
+  steps + this step's addition, new part marked with a short comment).
+- The final code block is the complete, clean, runnable version (no narration comments).
+
+For case B, just answer concisely and do not use step markers.
+
+Output format (STRICT — these markers are machine-parsed):
+- Always start with exactly one line: <<<MODE:STEPS>>> or <<<MODE:TEXT>>>
+- For <<<MODE:STEPS>>>, after the marker repeat for each step:
+<<<STEP>>>
+<why first, then what this step adds>
+<<<CODE>>>
+```python
+<entire cumulative code so far>
+```
+- After the last step:
+<<<FINAL_CODE>>>
+```python
+<complete clean solution>
+```
+- For <<<MODE:TEXT>>>, write the plain answer right after the marker (Telegram HTML allowed: <b>, <code>, <pre>).
 
 Recent conversation:
 {history}
@@ -187,6 +214,57 @@ Recent conversation:
 User's new question: {question}
 
 Your answer:"""
+
+
+def _format_stepped_followup(steps: list[dict], final_code: str | None) -> str:
+    e = html.escape
+    parts = ["<b>🛠 Updated solution — building it up:</b>"]
+    for i, s in enumerate(steps, 1):
+        text = e(s.get("step") or "")
+        code = s.get("code")
+        if code:
+            parts.append(f"<b>step {i}.</b> {text}\n<pre>{e(code)}</pre>")
+        else:
+            parts.append(f"<b>step {i}.</b> {text}")
+    if final_code:
+        parts.append("\n<b>Final code:</b>\n<pre>" + e(final_code) + "</pre>")
+    return "\n\n".join(parts)
+
+
+def _parse_stepped_answer(text: str) -> tuple[str, str]:
+    """Returns (mode, rendered). mode is 'steps' or 'text'. Falls back to
+    ('text', raw) when markers are missing or malformed."""
+    marker_re = re.compile(r"<<<MODE:(STEPS|TEXT)>>>")
+    m = marker_re.search(text)
+    if not m:
+        return "text", text.strip()
+    mode = m.group(1).lower()
+    body = text[m.end():].strip()
+    if mode == "text":
+        return "text", body
+
+    steps: list[dict] = []
+    final_code = None
+    chunks = body.split("<<<STEP>>>")[1:]
+    for chunk in chunks:
+        if "<<<CODE>>>" not in chunk:
+            return "text", text.replace("<<<", "").strip()  # malformed — fallback
+        explanation, rest = chunk.split("<<<CODE>>>", 1)
+        code = ""
+        fm = re.search(r"```(?:python)?\s*\n(.*?)```", rest, re.DOTALL)
+        if fm:
+            code = fm.group(1).rstrip()
+        if "<<<FINAL_CODE>>>" in rest:
+            frest = rest.split("<<<FINAL_CODE>>>", 1)[1]
+            ffm = re.search(r"```(?:python)?\s*\n(.*?)```", frest, re.DOTALL)
+            if ffm:
+                final_code = ffm.group(1).rstrip()
+        steps.append({"step": explanation.strip(), "code": code})
+    if not steps:
+        return "text", text.replace("<<<", "").strip()
+    if final_code is None:
+        final_code = steps[-1].get("code")
+    return "steps", _format_stepped_followup(steps, final_code)
 
 
 def answer_followup(question: str) -> str:
@@ -203,26 +281,28 @@ def answer_followup(question: str) -> str:
         client = genai.Client(api_key=GEMINI_API_KEY)
         resp = client.models.generate_content(
             model=GEMINI_MODEL, contents=[full],
-            config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=2048),
+            config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=4096),
         )
-        return (resp.text or "").strip()
-
-    if OPENAI_API_KEY:
+        raw = (resp.text or "").strip()
+    elif OPENAI_API_KEY:
         r = httpx.post(
             f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
             json={
                 "model": VISION_MODEL,
                 "temperature": 0.3,
-                "max_tokens": 2048,
+                "max_tokens": 4096,
                 "messages": [{"role": "user", "content": full}],
             },
             timeout=120,
         )
         r.raise_for_status()
-        return (r.json()["choices"][0]["message"]["content"] or "").strip()
+        raw = (r.json()["choices"][0]["message"]["content"] or "").strip()
+    else:
+        raise RuntimeError("No LLM configured for follow-up answers")
 
-    raise RuntimeError("No LLM configured for follow-up answers")
+    mode, rendered = _parse_stepped_answer(raw)
+    return rendered
 
 
 # set per-chat before calling answer_followup
