@@ -101,30 +101,39 @@ def _analyze_gemini(image_bytes: bytes, mime_type: str) -> dict:
 
 def _analyze_openai(image_bytes: bytes, mime_type: str) -> dict:
     b64 = base64.b64encode(image_bytes).decode()
-    resp = httpx.post(
-        f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-        json={
-            "model": VISION_MODEL,
-            "temperature": 0.2,
-            "max_tokens": 8192,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": PROMPT},
+    last_err: Exception | None = None
+    for attempt in range(2):
+        try:
+            resp = httpx.post(
+                f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                json={
+                    "model": VISION_MODEL,
+                    "temperature": 0.2,
+                    "max_tokens": 8192,
+                    "messages": [
                         {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime_type};base64,{b64}"},
-                        },
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": PROMPT},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:{mime_type};base64,{b64}"},
+                                },
+                            ],
+                        }
                     ],
-                }
-            ],
-        },
-        timeout=120,
-    )
-    resp.raise_for_status()
-    return _extract_json(resp.json()["choices"][0]["message"]["content"])
+                },
+                timeout=300,
+            )
+            resp.raise_for_status()
+            return _extract_json(resp.json()["choices"][0]["message"]["content"])
+        except (httpx.TimeoutException, httpx.HTTPStatusError) as e:
+            # retry once on transient gateway slowness / 5xx
+            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code < 500:
+                raise
+            last_err = e
+    raise last_err  # type: ignore[misc]
 
 
 def analyze_image(image_bytes: bytes, mime_type: str = "image/png") -> dict:

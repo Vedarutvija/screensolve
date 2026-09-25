@@ -318,7 +318,7 @@ def answer_followup(question: str, image_parts: list[bytes] | None = None) -> st
                 "max_tokens": 4096,
                 "messages": [{"role": "user", "content": content}],
             },
-            timeout=120,
+            timeout=300,
         )
         r.raise_for_status()
         raw = (r.json()["choices"][0]["message"]["content"] or "").strip()
