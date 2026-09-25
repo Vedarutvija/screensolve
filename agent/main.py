@@ -19,6 +19,23 @@ from PIL import ImageGrab
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
+# Under pythonw.exe (silent scheduled-task runs) sys.stdout/stderr are None,
+# so all print() output disappears — including crash tracebacks. Redirect to
+# a log file so silent runs remain diagnosable.
+LOG_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "screensolve"
+LOG_FILE = LOG_DIR / "agent.log"
+
+
+def _setup_silent_logging() -> None:
+    if os.name == "nt" and (sys.stdout is None or sys.stderr is None):
+        try:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            logf = open(LOG_FILE, "a", buffering=1, encoding="utf-8")
+            sys.stdout = logf
+            sys.stderr = logf
+        except Exception:
+            pass
+
 
 def load_config() -> dict:
     defaults = {
@@ -174,8 +191,11 @@ def run_periodic(cfg: dict) -> None:
 
 
 def main() -> int:
+    _setup_silent_logging()
     cfg = load_config()
     mode = cfg.get("mode", "telegram")
+    log(f"agent starting — config={CONFIG_PATH} mode={mode} server={cfg.get('server_url')}")
+    log(f"logs: {LOG_FILE} (tail it with: Get-Content \"{LOG_FILE}\" -Wait)")
 
     if mode == "telegram":
         try:
@@ -219,4 +239,16 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception:
+        import traceback
+
+        try:
+            _setup_silent_logging()
+            traceback.print_exc()
+        except Exception:
+            pass
+        sys.exit(1)
