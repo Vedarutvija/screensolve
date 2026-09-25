@@ -2,6 +2,7 @@
 
 import base64
 import html
+import os
 import re
 import threading
 import time
@@ -216,6 +217,16 @@ User's new question: {question}
 Your answer:"""
 
 
+IMAGES_CONTEXT_SUFFIX = """
+
+Attached are screenshot(s) of content the user previously captured from their
+screen (dataset previews, question parts, or their own code). Treat them as
+GROUND-TRUTH CONTEXT for the follow-up: read the dataset columns/values, the
+question text, and any visible code directly from the images. If the user's
+follow-up is a request to SOLVE or MODIFY code, answer in the additive stepped
+style; ground every step in what is actually visible in the images."""
+
+
 def _format_stepped_followup(steps: list[dict], final_code: str | None) -> str:
     e = html.escape
     parts = ["<b>🛠 Updated solution — building it up:</b>"]
@@ -267,24 +278,37 @@ def _parse_stepped_answer(text: str) -> tuple[str, str]:
     return "steps", _format_stepped_followup(steps, final_code)
 
 
-def answer_followup(question: str) -> str:
+def answer_followup(question: str, image_parts: list[bytes] | None = None) -> str:
     history = chat_history.recent(question_chat_id_holder.get("chat_id", ""))
     hist_text = "\n".join(
         f"[{m['role']}] {m['content'][:800]}" for m in history
     ) or "(none — no captures delivered to this chat yet)"
     full = FOLLOWUP_PROMPT.format(history=hist_text, question=question)
+    if image_parts:
+        full += IMAGES_CONTEXT_SUFFIX
 
     if GEMINI_API_KEY:
         from google import genai
         from google.genai import types
 
         client = genai.Client(api_key=GEMINI_API_KEY)
+        contents: list = [
+            types.Part.from_bytes(data=p, mime_type="image/png") for p in (image_parts or [])
+        ]
+        contents.append(full)
         resp = client.models.generate_content(
-            model=GEMINI_MODEL, contents=[full],
+            model=GEMINI_MODEL, contents=contents,
             config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=4096),
         )
         raw = (resp.text or "").strip()
     elif OPENAI_API_KEY:
+        content: list = [{"type": "text", "text": full}]
+        for p in image_parts or []:
+            b64 = base64.b64encode(p).decode()
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}"},
+            })
         r = httpx.post(
             f"{OPENAI_BASE_URL.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
@@ -292,7 +316,7 @@ def answer_followup(question: str) -> str:
                 "model": VISION_MODEL,
                 "temperature": 0.3,
                 "max_tokens": 4096,
-                "messages": [{"role": "user", "content": full}],
+                "messages": [{"role": "user", "content": content}],
             },
             timeout=120,
         )
@@ -303,6 +327,34 @@ def answer_followup(question: str) -> str:
 
     mode, rendered = _parse_stepped_answer(raw)
     return rendered
+
+
+def recent_session_images(db) -> list[bytes]:
+    """Images from the most recently active capture session (any status with
+    captured parts) — used to give voice/text follow-ups visual context."""
+    from server.models import Capture, CaptureSession
+
+    sess_ids = [
+        s.id for s in db.query(CaptureSession)
+        .order_by(CaptureSession.id.desc()).limit(10).all()
+    ]
+    for sid in sess_ids:
+        imgs = []
+        rows = (
+            db.query(Capture)
+            .filter_by(session_id=sid, status="captured")
+            .order_by(Capture.id.asc()).all()
+        )
+        for r in rows:
+            if os.path.exists(r.image_path):
+                try:
+                    with open(r.image_path, "rb") as f:
+                        imgs.append(f.read())
+                except OSError:
+                    pass
+        if imgs:
+            return imgs
+    return []
 
 
 # set per-chat before calling answer_followup
@@ -528,13 +580,18 @@ def _poll_loop() -> None:
                 else:
                     continue
 
-                # follow-up question path
+                # follow-up question path — give the model the most recent
+                # captured session images (dataset/question parts) as context
                 question_chat_id_holder["chat_id"] = str(chat_id)
                 chat_history.add(chat_id, "user", question)
                 try:
-                    answer = answer_followup(question)
+                    answer = answer_followup(question, recent_session_images(db))
                 except Exception as e:  # noqa: BLE001
-                    answer = f"⚠️ Couldn't answer that right now: {str(e)[:150]}"
+                    # retry once text-only (e.g. context images too large)
+                    try:
+                        answer = answer_followup(question)
+                    except Exception as e2:  # noqa: BLE001
+                        answer = f"⚠️ Couldn't answer that right now: {str(e2)[:150]}"
                 chat_history.add(chat_id, "assistant", answer)
                 send_message(chat_id, answer)
         except Exception:
