@@ -195,6 +195,9 @@ A) The user asks to SOLVE a problem, or for a CODE CHANGE or new implementation
    "write code for..."). ALWAYS pick A when code should be produced or changed —
    even if the request is short or vague.
 B) Purely conceptual/explanatory questions with no code to produce.
+C) TOOL / SETUP / WORKFLOW guidance — the user asks HOW to use, test, run, or set
+   up something ("how do I test this in Postman?", "how do I call this API?",
+   "how do I deploy this?", "how do I install/run it?").
 
 For case A, answer in the ADDITIVE live-coding tutor style — steps are REQUIRED:
 - Split the work into granular steps; each step introduces exactly ONE concept.
@@ -205,6 +208,13 @@ For case A, answer in the ADDITIVE live-coding tutor style — steps are REQUIRE
   steps + this step's addition, new part marked with a short comment).
 - The final code block is the complete, clean, runnable version (no narration comments).
 
+For case C, give CLICK-BY-CLICK tool steps the user can follow exactly:
+- Number each ACTION: what to open, what to click, what to select, what to type.
+- Under each action, give the EXACT payload for that step (URL, headers, JSON
+  body, command) in a code fence — grounded in the captured problem/code when
+  available (use its actual endpoint paths, parameter names, and values).
+- Cover the complete flow start to finish, including how to verify the result.
+
 For case B, answer concisely but still format nicely: use **bold** for key terms
 and ``` code fences for any code snippet.
 
@@ -212,7 +222,7 @@ Markdown formatting (**bold**, *italic*, `inline code`, ``` fences) is supported
 everywhere in your reply and will be rendered — use it generously.
 
 Output format (STRICT — these markers are machine-parsed):
-- Always start with exactly one line: <<<MODE:STEPS>>> or <<<MODE:TEXT>>>
+- Always start with exactly one line: <<<MODE:STEPS>>>, <<<MODE:TEXT>>>, or <<<MODE:TOOL>>>
 - For <<<MODE:STEPS>>>, after the marker repeat for each step:
 <<<STEP>>>
 <why first, then what this step adds>
@@ -224,6 +234,13 @@ Output format (STRICT — these markers are machine-parsed):
 <<<FINAL_CODE>>>
 ```python
 <complete clean solution>
+```
+- For <<<MODE:TOOL>>>, after the marker repeat for each action:
+<<<STEP>>>
+<the action: open/click/select/type...>
+<<<DETAIL>>>
+```text
+<exact payload/URL/command for this step — omit this fence entirely if none>
 ```
 - For <<<MODE:TEXT>>>, write the plain answer right after the marker (Telegram HTML allowed: <b>, <code>, <pre>).
 
@@ -335,6 +352,33 @@ def _format_stepped_followup(steps: list[dict], final_code: str | None) -> str:
     return "\n\n".join(parts)
 
 
+def _parse_tool_answer(body: str) -> str:
+    """Render MODE:TOOL steps: each STEP is an action, optional DETAIL holds the
+    exact payload for that step. Falls back to cleaned raw text if malformed."""
+    e = html.escape
+    chunks = body.split("<<<STEP>>>")[1:]
+    if not chunks:
+        return body.replace("<<<", "").strip()
+    parts = ["<b>🧪 How to do it — step by step:</b>"]
+    for i, chunk in enumerate(chunks, 1):
+        if "<<<DETAIL>>>" in chunk:
+            action, detail = chunk.split("<<<DETAIL>>>", 1)
+            action = action.strip()
+            detail = detail.strip()
+        else:
+            action, detail = chunk.strip(), ""
+        action_html = markdown_to_telegram_html(action)
+        if detail:
+            fm = re.search(r"```[a-zA-Z0-9_+-]*[ \t]*\n(.*?)```", detail, re.DOTALL)
+            payload = (fm.group(1) if fm else detail).rstrip()
+            parts.append(
+                f"<b>🔹 Step {i}</b>\n{action_html}\n<pre>{e(payload)}</pre>"
+            )
+        else:
+            parts.append(f"<b>🔹 Step {i}</b>\n{action_html}")
+    return "\n\n".join(parts)
+
+
 def _parse_stepped_answer(text: str) -> tuple[str, str]:
     """Returns (mode, rendered). mode is 'steps' or 'text'. Falls back to
     ('text', raw) when markers are missing or malformed.
@@ -345,22 +389,28 @@ def _parse_stepped_answer(text: str) -> tuple[str, str]:
     # brackets (<<..>>) or bold (**) AROUND the keyword — bare words like
     # "this step adds" in prose must NOT become phantom markers.
     _NOISE = {
-        "mode": r"(?:<{2,3}|\*\*)\s*MODE\s*:?\s*(_?STEPS?|_?TEXT)\s*(?:\*\*|>{2,3})",
+        "mode": r"(?:<{2,3}|\*\*)\s*MODE\s*:?\s*(_?STEPS?|_?TEXT|_?TOOL|_?GUIDE)\s*(?:\*\*|>{2,3})",
         "step": r"(?:<{2,3}|\*\*)\s*STEP\b(?!S\b)\s*(?:\*\*|>{2,3})",
         "code": r"(?:<{2,3}|\*\*)\s*CODE\s*(?:\*\*|>{2,3})",
+        "detail": r"(?:<{2,3}|\*\*)\s*DETAIL\s*(?:\*\*|>{2,3})",
         "final": r"(?:<{2,3}|\*\*)\s*FINAL[_\s-]*CODE\s*(?:\*\*|>{2,3})",
     }
 
     def _canon(m: re.Match) -> str:
         word = (m.group(1) or "").upper().replace(" ", "").lstrip("_")
+        if word.startswith("TOOL"):
+            word = "TOOL"
+        elif word.startswith("GUIDE"):
+            word = "TOOL"
         return f"<<<MODE:{word}>>>"
 
     text = re.sub(_NOISE["mode"], _canon, text, flags=re.IGNORECASE)
     text = re.sub(_NOISE["step"], "<<<STEP>>>", text, flags=re.IGNORECASE)
     text = re.sub(_NOISE["code"], "<<<CODE>>>", text, flags=re.IGNORECASE)
+    text = re.sub(_NOISE["detail"], "<<<DETAIL>>>", text, flags=re.IGNORECASE)
     text = re.sub(_NOISE["final"], "<<<FINAL_CODE>>>", text, flags=re.IGNORECASE)
 
-    marker_re = re.compile(r"<<<MODE:(STEPS|TEXT)>>>")
+    marker_re = re.compile(r"<<<MODE:(STEPS|TEXT|TOOL)>>>")
     m = marker_re.search(text)
     if not m:
         return "text", text.strip()
@@ -368,6 +418,9 @@ def _parse_stepped_answer(text: str) -> tuple[str, str]:
     body = text[m.end():].strip()
     if mode == "text":
         return "text", body
+
+    if mode == "tool":
+        return "steps", _parse_tool_answer(body)
 
     steps: list[dict] = []
     final_code = None

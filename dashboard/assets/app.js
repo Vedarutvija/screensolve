@@ -35,6 +35,34 @@ function stepsHTML(steps) {
   return out;
 }
 
+function speakableText(c) {
+  // plain-text version of a solution for speech: problem + step explanations.
+  // Code blocks are NOT read verbatim — only mentioned.
+  const parts = [];
+  if (c.problem_statement) parts.push("Problem: " + c.problem_statement);
+  for (const s of c.solution_steps || []) {
+    if (typeof s === "object" && s !== null) {
+      if (s.step) parts.push(s.step);
+    } else {
+      parts.push(String(s));
+    }
+  }
+  if (c.notes) parts.push("Feedback: " + c.notes);
+  return parts.join(" ");
+}
+
+function toggleSpeak(cardEl, c) {
+  const synth = window.speechSynthesis;
+  if (!synth) return;
+  if (synth.speaking) {
+    synth.cancel();
+    return;
+  }
+  const u = new SpeechSynthesisUtterance(speakableText(c));
+  u.rate = 1.0;
+  synth.speak(u);
+}
+
 function cardHTML(c) {
   let body = "";
   if (c.status === "solved") {
@@ -56,7 +84,11 @@ function cardHTML(c) {
   } else {
     body = `<div class="card-body"><div class="errbox" style="color:var(--warn)">${badge(c.status)} Reading the screen with Gemini…</div></div>`;
   }
-  return `<article class="card" id="cap-${c.id}">
+  const canSpeak = "speechSynthesis" in window;
+  const speakBtn = (c.status === "solved" && canSpeak)
+    ? `<button class="speak-btn" data-cap="${c.id}" title="Read aloud" aria-label="Read aloud">🔊</button>`
+    : "";
+  return `<article class="card" id="cap-${c.id}" data-st="${c.status}">
     <div class="card-top">
       <img class="thumb" src="${c.image_url}" alt="screenshot" loading="lazy"
            onerror="this.style.visibility='hidden'">
@@ -64,6 +96,7 @@ function cardHTML(c) {
         ${badge(c.status)}
         <div class="time">${fmtTime(c.created_at)}</div>
       </div>
+      ${speakBtn}
     </div>
     ${c.problem_statement ? `<div class="problem"><b>Problem:</b> ${esc(c.problem_statement)}</div>` : ""}
     ${body}
@@ -114,6 +147,15 @@ document.addEventListener("click", e => {
     lb.style.display = "flex";
   } else if (e.target.closest("#lb")) {
     lb.style.display = "none";
+  } else if (e.target.classList.contains("speak-btn")) {
+    const cardEl = e.target.closest(".card");
+    const id = Number(e.target.dataset.cap);
+    fetch("/api/captures?limit=50")
+      .then(r => r.json())
+      .then(items => {
+        const c = (items || []).find(x => x.id === id);
+        if (c) toggleSpeak(cardEl, c);
+      });
   }
 });
 
