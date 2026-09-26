@@ -238,11 +238,17 @@ Your answer:"""
 IMAGES_CONTEXT_SUFFIX = """
 
 Attached are screenshot(s) of content the user previously captured from their
-screen (dataset previews, question parts, or their own code). Treat them as
-GROUND-TRUTH CONTEXT for the follow-up: read the dataset columns/values, the
-question text, and any visible code directly from the images. If the user's
-follow-up is a request to SOLVE or MODIFY code, answer in the additive stepped
-style; ground every step in what is actually visible in the images."""
+screen (dataset previews, question parts, their own code, or a COMPLETE
+solution shown on screen). Treat them as GROUND-TRUTH CONTEXT:
+- Read code, problems, and datasets directly from the images — even if no
+  solution was ever delivered in the conversation below, the image IS the
+  current state of the user's code.
+- When the user's question says "do X" / "change it" / "refactor" with no
+  explicit target, "it" means the code visible in these images.
+- Base your answer on the image content (variables, function names, approach),
+  not on assumptions.
+- If the request involves SOLVE/MODIFY/WRITE code, you MUST use the additive
+  stepped style (mode STEPS)."""
 
 
 _MD_CODE_RE = re.compile(r"```[a-zA-Z0-9_+-]*[ \t]*\n(.*?)```", re.DOTALL)
@@ -366,7 +372,7 @@ def _parse_stepped_answer(text: str) -> tuple[str, str]:
 
 
 def answer_followup(question: str, image_parts: list[bytes] | None = None) -> str:
-    history = chat_history.recent(question_chat_id_holder.get("chat_id", ""))
+    history = chat_history.recent(question_chat_id_holder.get("chat_id", ""), limit=14)
     hist_text = "\n".join(
         f"[{m['role']}] {m['content'][:800]}" for m in history
     ) or "(none — no captures delivered to this chat yet)"
@@ -571,9 +577,12 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
             for i, img in enumerate(images, 1):
                 send_photo(chat_id, img, caption=f"part {i}/{len(images)}")
             send_message(chat_id, format_solution(cap))
-            chat_history.add(chat_id, "assistant",
-                             f"Solution for capture #{cap.id} ({len(images)} parts): "
-                             + (cap.problem_statement or "")[:500])
+            _hist_summary = (
+                f"Solution for capture #{cap.id} ({len(images)} parts).\n"
+                f"Problem: {(cap.problem_statement or '')[:500]}\n"
+                f"Final code:\n{(cap.optimized_code or '')[:1500]}"
+            )
+            chat_history.add(chat_id, "assistant", _hist_summary)
 
         elif cmd == "status":
             sess = db.query(CaptureSession).filter_by(status="open").first()
