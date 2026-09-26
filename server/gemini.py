@@ -79,7 +79,8 @@ def _extract_json(text: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
-def _analyze_gemini(image_bytes: bytes, mime_type: str) -> dict:
+def _analyze_gemini(image_bytes: bytes, mime_type: str,
+                    extra_instruction: str = "") -> dict:
     from google import genai
     from google.genai import types
 
@@ -88,7 +89,7 @@ def _analyze_gemini(image_bytes: bytes, mime_type: str) -> dict:
         model=GEMINI_MODEL,
         contents=[
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            PROMPT,
+            PROMPT + extra_instruction,
         ],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -99,7 +100,8 @@ def _analyze_gemini(image_bytes: bytes, mime_type: str) -> dict:
     return _extract_json(response.text or "")
 
 
-def _analyze_openai(image_bytes: bytes, mime_type: str) -> dict:
+def _analyze_openai(image_bytes: bytes, mime_type: str = "image/png",
+                    extra_instruction: str = "") -> dict:
     b64 = base64.b64encode(image_bytes).decode()
     last_err: Exception | None = None
     for attempt in range(2):
@@ -115,7 +117,7 @@ def _analyze_openai(image_bytes: bytes, mime_type: str) -> dict:
                         {
                             "role": "user",
                             "content": [
-                                {"type": "text", "text": PROMPT},
+                                {"type": "text", "text": PROMPT + extra_instruction},
                                 {
                                     "type": "image_url",
                                     "image_url": {"url": f"data:{mime_type};base64,{b64}"},
@@ -136,11 +138,12 @@ def _analyze_openai(image_bytes: bytes, mime_type: str) -> dict:
     raise last_err  # type: ignore[misc]
 
 
-def analyze_image(image_bytes: bytes, mime_type: str = "image/png") -> dict:
+def analyze_image(image_bytes: bytes, mime_type: str = "image/png",
+                  extra_instruction: str = "") -> dict:
     if GEMINI_API_KEY:
-        return _analyze_gemini(image_bytes, mime_type)
+        return _analyze_gemini(image_bytes, mime_type, extra_instruction)
     if OPENAI_API_KEY:
-        return _analyze_openai(image_bytes, mime_type)
+        return _analyze_openai(image_bytes, mime_type, extra_instruction)
     raise RuntimeError("No vision API key configured (set GEMINI_API_KEY or OPENAI_API_KEY)")
 
 
@@ -158,19 +161,32 @@ nothing else — no markdown fences, no prose before or after, no explanation.
 Start your response with { and end it with }."""
 
 
-def analyze_images_multi(image_parts: list[bytes], mime_type: str = "image/png") -> dict:
-    """Analyze several screenshots (scroll parts) as ONE combined question."""
+def analyze_images_multi(image_parts: list[bytes], mime_type: str = "image/png",
+                         extra_instruction: str | None = None) -> dict:
+    """Analyze several screenshots (scroll parts) as ONE combined question.
+
+    extra_instruction: optional user instruction (e.g. a voice note like
+    "solve it with recursion") appended to the prompt so the solve follows it.
+    """
     if not image_parts:
         raise ValueError("no images")
-    if len(image_parts) == 1:
-        return analyze_image(image_parts[0], mime_type)
+    instruction = ""
+    if extra_instruction:
+        instruction = (
 
-    prompt = MULTI_PREFIX.format(n=len(image_parts)) + PROMPT
+            f"\n\nSPECIAL USER INSTRUCTION (voice/text) — follow it while solving:\n"
+            f"\"\"\"\n{extra_instruction.strip()}\n\"\"\"\n"
+        )
+    if len(image_parts) == 1:
+        return analyze_image(image_parts[0], mime_type, extra_instruction=instruction)
+
+    base = MULTI_PREFIX.format(n=len(image_parts)) + PROMPT + instruction
     last_err = None
     for attempt in range(3):
         try:
+            prompt = base
             if attempt == 1:
-                prompt = MULTI_PREFIX.format(n=len(image_parts)) + PROMPT + JSON_ONLY_SUFFIX
+                prompt = MULTI_PREFIX.format(n=len(image_parts)) + PROMPT + instruction + JSON_ONLY_SUFFIX
             return _analyze_multi_once(image_parts, mime_type, prompt,
                                        max_tokens=8192 if attempt < 2 else 16384)
         except (ValueError, KeyError) as e:

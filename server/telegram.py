@@ -337,7 +337,29 @@ def _format_stepped_followup(steps: list[dict], final_code: str | None) -> str:
 
 def _parse_stepped_answer(text: str) -> tuple[str, str]:
     """Returns (mode, rendered). mode is 'steps' or 'text'. Falls back to
-    ('text', raw) when markers are missing or malformed."""
+    ('text', raw) when markers are missing or malformed.
+
+    Tolerates marker noise: model may wrap markers in bold/italics, add
+    spaces, or drop some angle brackets (e.g. '**MODE:STEPS**>', 'MODE: STEPS')."""
+    # normalize noisy marker variants to canonical form. IMPORTANT: require
+    # brackets (<<..>>) or bold (**) AROUND the keyword — bare words like
+    # "this step adds" in prose must NOT become phantom markers.
+    _NOISE = {
+        "mode": r"(?:<{2,3}|\*\*)\s*MODE\s*:?\s*(_?STEPS?|_?TEXT)\s*(?:\*\*|>{2,3})",
+        "step": r"(?:<{2,3}|\*\*)\s*STEP\b(?!S\b)\s*(?:\*\*|>{2,3})",
+        "code": r"(?:<{2,3}|\*\*)\s*CODE\s*(?:\*\*|>{2,3})",
+        "final": r"(?:<{2,3}|\*\*)\s*FINAL[_\s-]*CODE\s*(?:\*\*|>{2,3})",
+    }
+
+    def _canon(m: re.Match) -> str:
+        word = (m.group(1) or "").upper().replace(" ", "").lstrip("_")
+        return f"<<<MODE:{word}>>>"
+
+    text = re.sub(_NOISE["mode"], _canon, text, flags=re.IGNORECASE)
+    text = re.sub(_NOISE["step"], "<<<STEP>>>", text, flags=re.IGNORECASE)
+    text = re.sub(_NOISE["code"], "<<<CODE>>>", text, flags=re.IGNORECASE)
+    text = re.sub(_NOISE["final"], "<<<FINAL_CODE>>>", text, flags=re.IGNORECASE)
+
     marker_re = re.compile(r"<<<MODE:(STEPS|TEXT)>>>")
     m = marker_re.search(text)
     if not m:
@@ -529,7 +551,16 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
                 images = agent_api.session_images(db, sess.id)
                 if not images:
                     raise RuntimeError("captured images could not be read from disk")
-                result = analyze_images_multi(images)
+                # any voice/text instructions sent while capturing (before s)
+                # must shape the solve — pull them from chat history
+                pending = [
+                    m["content"] for m in chat_history.recent(chat_id, limit=10)
+                    if m["role"] == "user"
+                    and "🎙️" not in m["content"]
+                    and m["content"].strip().lower() not in ("c", "s", "status")
+                ]
+                extra = " ".join(pending[-3:]).strip() or None
+                result = analyze_images_multi(images, extra_instruction=extra)
             except Exception as e:  # noqa: BLE001
                 sess.status = "open"  # allow retry
                 db.commit()
