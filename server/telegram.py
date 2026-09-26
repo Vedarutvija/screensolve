@@ -531,6 +531,32 @@ def recent_session_images(db) -> list[bytes]:
 question_chat_id_holder: dict = {}
 
 
+def answer_and_store(question: str, chat_id: str, include_images: bool = True) -> str:
+    """Shared follow-up pipeline used by both the Telegram bot and the
+    dashboard chat: store the question, answer with recent capture images as
+    context, store the answer, return the rendered text."""
+    question_chat_id_holder["chat_id"] = chat_id
+    chat_history.add(chat_id, "user", question)
+
+    def _run(with_imgs: bool) -> str:
+        imgs = _recent_images_safe() if with_imgs else []
+        return answer_followup(question, imgs)
+
+    try:
+        answer = _run(include_images)
+    except Exception as e:  # noqa: BLE001
+        if not include_images:
+            answer = f"⚠️ Couldn't answer that right now: {str(e)[:150]}"
+        else:
+            # retry once text-only (e.g. context images too large)
+            try:
+                answer = _run(False)
+            except Exception as e2:  # noqa: BLE001
+                answer = f"⚠️ Couldn't answer that right now: {str(e2)[:150]}"
+    chat_history.add(chat_id, "assistant", answer)
+    return answer
+
+
 def _handle_session_command(cmd: str, chat_id: str) -> None:
     from server.database import SessionLocal
     from server.models import Capture, CaptureSession
@@ -785,18 +811,7 @@ def _handle_update(msg: dict, chat_id: str) -> None:
 
     # follow-up question path — give the model the most recent
     # captured session images (dataset/question parts) as context
-    question_chat_id_holder["chat_id"] = chat_id
-    chat_history.add(chat_id, "user", question)
-    try:
-        answer = answer_followup(question, _recent_images_safe())
-    except Exception as e:  # noqa: BLE001
-        # retry once text-only (e.g. context images too large)
-        try:
-            answer = answer_followup(question)
-        except Exception as e2:  # noqa: BLE001
-            answer = f"⚠️ Couldn't answer that right now: {str(e2)[:150]}"
-    chat_history.add(chat_id, "assistant", answer)
-    send_message(chat_id, answer)
+    send_message(chat_id, answer := answer_and_store(question, chat_id))
 
 
 def _recent_images_safe() -> list[bytes]:

@@ -159,5 +159,115 @@ document.addEventListener("click", e => {
   }
 });
 
+/* ---------- Chat panel (same pipeline as the Telegram bot) ---------- */
+
+const chatlog = document.getElementById("chatlog");
+const chatin = document.getElementById("chatin");
+const chatsend = document.getElementById("chatsend");
+const micbtn = document.getElementById("micbtn");
+
+function addMsg(cls, html) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  d.innerHTML = html;
+  chatlog.appendChild(d);
+  chatlog.scrollTop = chatlog.scrollHeight;
+  return d;
+}
+
+// Render a bot answer. All server answers that contain markup are
+// Telegram-flavoured HTML with content already escaped server-side — insert
+// directly. Pure plain-text answers get light formatting only.
+function renderAnswer(text) {
+  if (/<(\/?)(b|i|u|code|pre)\b/i.test(text)) {
+    // replace bare <pre>...</pre> with our styled blocks (no hljs class)
+    return text.replace(/<pre><code>/g, '<pre>').replace(/<\/code><\/pre>/g, '</pre>');
+  }
+  let out = esc(text);
+  out = out.replace(/&lt;(\/?)(b|i|code|u)&gt;/g, "<$1$2>");
+  out = out.replace(/^(🔹|🧪|📋|✅|⚠️|🎙)/gm, "<b>$1</b>");
+  return out;
+}
+
+async function ask(text) {
+  addMsg("user", esc(text));
+  const t = addMsg("bot typing", "Thinking…");
+  try {
+    const r = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || "request failed");
+    t.classList.remove("typing");
+    t.innerHTML = renderAnswer(j.answer || "(empty answer)");
+    chatlog.scrollTop = chatlog.scrollHeight;
+    if (window.hljs) hljs.highlightAll();
+  } catch (e) {
+    t.classList.remove("typing");
+    t.innerHTML = "⚠️ " + esc(String(e.message || e));
+  }
+}
+
+async function askVoice(blob) {
+  const t = addMsg("bot typing", "🎙 Transcribing…");
+  try {
+    const fd = new FormData();
+    fd.append("audio", blob, "voice.webm");
+    const r = await fetch("/api/chat/voice", { method: "POST", body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || "request failed");
+    addMsg("user", "🎙 “" + esc(j.transcript) + "”");
+    t.classList.remove("typing");
+    t.innerHTML = renderAnswer(j.answer || "(empty answer)");
+    chatlog.scrollTop = chatlog.scrollHeight;
+    if (window.hljs) hljs.highlightAll();
+  } catch (e) {
+    t.classList.remove("typing");
+    t.innerHTML = "⚠️ " + esc(String(e.message || e));
+  }
+}
+
+chatsend.addEventListener("click", () => {
+  const v = chatin.value.trim();
+  if (!v || chatsend.disabled) return;
+  chatin.value = "";
+  ask(v);
+});
+chatin.addEventListener("keydown", e => {
+  if (e.key === "Enter") chatsend.click();
+});
+
+/* mic: MediaRecorder → POST /api/chat/voice */
+let mediaRec = null, recChunks = [], recStream = null;
+micbtn.addEventListener("click", async () => {
+  if (mediaRec && mediaRec.state === "recording") {
+    mediaRec.stop();
+    return;
+  }
+  try {
+    recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    addMsg("bot", "⚠️ Microphone unavailable: " + esc(String(e.message || e)));
+    return;
+  }
+  recChunks = [];
+  const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+  mediaRec = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+  mediaRec.ondataavailable = ev => { if (ev.data.size) recChunks.push(ev.data); };
+  mediaRec.onstop = () => {
+    recStream.getTracks().forEach(t => t.stop());
+    micbtn.classList.remove("rec");
+    micbtn.title = "Record voice";
+    chatsend.disabled = false;
+    if (recChunks.length) askVoice(new Blob(recChunks, { type: mime || "audio/webm" }));
+  };
+  mediaRec.start();
+  micbtn.classList.add("rec");
+  micbtn.title = "Recording — click to stop & send";
+  chatsend.disabled = true;
+});
+
 refresh();
 setInterval(refresh, 4000);

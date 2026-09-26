@@ -48,6 +48,26 @@ pre code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 /* lightbox */
 #lb { display:none; position:fixed; inset:0; background:rgba(0,0,0,.9); z-index:100; align-items:center; justify-content:center; padding:16px; }
 #lb img { max-width:100%; max-height:100%; border-radius:8px; }
+/* chat panel */
+#chat { background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+#chat .chat-head { display:flex; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid var(--line); font-size:13px; font-weight:700; }
+#chat .chat-head .hint { margin-left:auto; font-size:11px; font-weight:400; color:var(--dim); }
+#chatlog { display:flex; flex-direction:column; gap:10px; padding:14px; max-height:420px; overflow-y:auto; }
+.msg { max-width:92%; padding:9px 12px; border-radius:12px; font-size:13.5px; line-height:1.55; white-space:pre-wrap; word-wrap:break-word; }
+.msg.user { align-self:flex-end; background:rgba(79,140,255,.18); border:1px solid rgba(79,140,255,.35); }
+.msg.bot { align-self:flex-start; background:rgba(255,255,255,.03); border:1px solid var(--line); }
+.msg.bot b { color:var(--accent); }
+.msg.bot code { font-family:ui-monospace,monospace; background:#0a0e17; border:1px solid var(--line); border-radius:5px; padding:1px 5px; font-size:12.5px; }
+.msg.bot pre { margin:8px 0; }
+.msg .meta-line { display:block; font-size:10.5px; color:var(--dim); margin-top:5px; }
+.msg.typing { color:var(--dim); font-style:italic; }
+.chat-bar { display:flex; gap:8px; padding:12px 14px; border-top:1px solid var(--line); }
+.chat-bar input { flex:1; background:#0a0e17; border:1px solid var(--line); border-radius:10px; color:var(--text); padding:10px 12px; font-size:13.5px; outline:none; }
+.chat-bar input:focus { border-color:var(--accent); }
+.chat-bar button { background:rgba(79,140,255,.15); color:var(--accent); border:1px solid rgba(79,140,255,.4); border-radius:10px; width:42px; font-size:16px; cursor:pointer; flex-shrink:0; transition:background .15s; }
+.chat-bar button:hover { background:rgba(79,140,255,.28); }
+.chat-bar button.rec { background:rgba(231,76,60,.2); border-color:var(--err); color:var(--err); animation:pulse 1.2s infinite; }
+.chat-bar button:disabled { opacity:.5; cursor:default; }
 </style>
 </head>
 <body>
@@ -56,6 +76,16 @@ pre code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
   <span class="live"><span class="dot"></span> live</span>
 </header>
 <main id="feed"><div class="empty">Loading…</div></main>
+
+<section id="chat">
+  <div class="chat-head">💬 Ask ScreenSolve <span class="hint">text or 🎙 voice — same answers as the Telegram bot</span></div>
+  <div id="chatlog"><div class="msg bot">👋 Ask a follow-up, a tool walkthrough ("how do I test this in Postman"), or anything about your latest capture. Say <b>c</b>/<b>s</b> in Telegram to capture/solve on screen.</div></div>
+  <div class="chat-bar">
+    <button id="micbtn" title="Record voice">🎙</button>
+    <input id="chatin" type="text" placeholder="Ask a question… (e.g. how do I test this in Postman?)" autocomplete="off">
+    <button id="chatsend" title="Send">➤</button>
+  </div>
+</section>
 <div id="lb"><img id="lbimg" alt="screenshot"></div>
 <script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="/assets/app.js"></script>
