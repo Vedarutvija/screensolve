@@ -40,12 +40,22 @@ def enabled() -> bool:
 
 
 def _call(method: str, **payload):
+    import logging
+
     if not enabled():
         return None
     try:
         r = httpx.post(f"{API}{TELEGRAM_BOT_TOKEN}/{method}", json=payload, timeout=30)
-        return r.json() if r.status_code == 200 else None
+        if r.status_code == 200:
+            return r.json()
+        logging.getLogger("screensolve.telegram").warning(
+            "Telegram %s failed: HTTP %s %s", method, r.status_code, r.text[:300]
+        )
+        return None
     except Exception:
+        logging.getLogger("screensolve.telegram").exception(
+            "Telegram %s request error", method
+        )
         return None
 
 
@@ -430,8 +440,10 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
             send_message(chat_id, f"🧠 Solving with {parts} part(s)…")
             sess.status = "solving"
             db.commit()
-            images = agent_api.session_images(db, sess.id)
             try:
+                images = agent_api.session_images(db, sess.id)
+                if not images:
+                    raise RuntimeError("captured images could not be read from disk")
                 result = analyze_images_multi(images)
             except Exception as e:  # noqa: BLE001
                 sess.status = "open"  # allow retry
@@ -526,6 +538,10 @@ def format_solution(capture) -> str:
 def _poll_loop() -> None:
     from server.database import SessionLocal
 
+    import logging
+
+    tg_log = logging.getLogger("screensolve.telegram")
+
     offset = 0
     while True:
         if not enabled():
@@ -545,60 +561,115 @@ def _poll_loop() -> None:
                 chat_id = chat.get("id")
                 if not chat_id:
                     continue
-                db = SessionLocal()
                 try:
-                    link_chat(db, chat_id, chat.get("title"))
-                finally:
-                    db.close()
-
-                voice = msg.get("voice") or msg.get("audio")
-                text = (msg.get("text") or "").strip()
-
-                if text and text.strip().lower() in ("c", "s", "status"):
-                    _handle_session_command(text.strip().lower(), str(chat_id))
-                    continue
-
-                if voice:
-                    file_id = voice.get("file_id")
-                    raw = download_file(file_id)
-                    if not raw:
-                        send_message(chat_id, "⚠️ Couldn't download the voice message — try again.")
-                        continue
-                    try:
-                        question = transcribe(raw)
-                    except Exception as e:  # noqa: BLE001
-                        send_message(chat_id, f"⚠️ Couldn't transcribe the voice message ({str(e)[:120]}). You can type the question instead.")
-                        continue
-                    if not question:
-                        send_message(chat_id, "🤔 The voice message came through silent — say it again?")
-                        continue
-                    send_message(chat_id, f"🎙️ Heard: “{question}”")
-                elif text and text.startswith("/"):
-                    continue  # commands handled elsewhere
-                elif text:
-                    question = text
-                else:
-                    continue
-
-                # follow-up question path — give the model the most recent
-                # captured session images (dataset/question parts) as context
-                question_chat_id_holder["chat_id"] = str(chat_id)
-                chat_history.add(chat_id, "user", question)
-                try:
-                    answer = answer_followup(question, recent_session_images(db))
-                except Exception as e:  # noqa: BLE001
-                    # retry once text-only (e.g. context images too large)
-                    try:
-                        answer = answer_followup(question)
-                    except Exception as e2:  # noqa: BLE001
-                        answer = f"⚠️ Couldn't answer that right now: {str(e2)[:150]}"
-                chat_history.add(chat_id, "assistant", answer)
-                send_message(chat_id, answer)
+                    _handle_update(msg, str(chat_id))
+                except Exception:
+                    tg_log.exception("failed handling Telegram update from chat %s", chat_id)
+                    send_message(
+                        str(chat_id),
+                        "⚠️ Something went wrong handling that — please try again.",
+                    )
         except Exception:
+            tg_log.exception("telegram getUpdates poll error")
             time.sleep(10)
+
+
+def _handle_update(msg: dict, chat_id: str) -> None:
+    from server.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        link_chat(db, chat_id, (msg.get("chat") or {}).get("title"))
+    finally:
+        db.close()
+
+    voice = msg.get("voice") or msg.get("audio")
+    text = (msg.get("text") or "").strip()
+
+    if text and text.strip().lower() in ("c", "s", "status"):
+        _handle_session_command(text.strip().lower(), chat_id)
+        return
+
+    if voice:
+        file_id = voice.get("file_id")
+        raw = download_file(file_id)
+        if not raw:
+            send_message(chat_id, "⚠️ Couldn't download the voice message — try again.")
+            return
+        try:
+            question = transcribe(raw)
+        except Exception as e:  # noqa: BLE001
+            send_message(chat_id, f"⚠️ Couldn't transcribe the voice message ({str(e)[:120]}). You can type the question instead.")
+            return
+        if not question:
+            send_message(chat_id, "🤔 The voice message came through silent — say it again?")
+            return
+        send_message(chat_id, f"🎙️ Heard: “{question}”")
+    elif text and text.startswith("/"):
+        return  # commands handled elsewhere
+    elif text:
+        question = text
+    else:
+        return
+
+    # follow-up question path — give the model the most recent
+    # captured session images (dataset/question parts) as context
+    question_chat_id_holder["chat_id"] = chat_id
+    chat_history.add(chat_id, "user", question)
+    try:
+        answer = answer_followup(question, _recent_images_safe())
+    except Exception as e:  # noqa: BLE001
+        # retry once text-only (e.g. context images too large)
+        try:
+            answer = answer_followup(question)
+        except Exception as e2:  # noqa: BLE001
+            answer = f"⚠️ Couldn't answer that right now: {str(e2)[:150]}"
+    chat_history.add(chat_id, "assistant", answer)
+    send_message(chat_id, answer)
+
+
+def _recent_images_safe() -> list[bytes]:
+    from server.database import SessionLocal
+
+    try:
+        db = SessionLocal()
+        try:
+            return recent_session_images(db)
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def start_bot() -> None:
     if not enabled():
         return
+    _reset_stuck_sessions()
     threading.Thread(target=_poll_loop, daemon=True).start()
+
+
+def _reset_stuck_sessions() -> None:
+    """Sessions left in 'solving' by a restart would block future solves — reopen them."""
+    from server.database import SessionLocal
+    from server.models import CaptureSession
+
+    try:
+        db = SessionLocal()
+        try:
+            stuck = (
+                db.query(CaptureSession)
+                .filter_by(status="solving")
+                .all()
+            )
+            if stuck:
+                for s in stuck:
+                    s.status = "open"
+                db.commit()
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger("screensolve.telegram").exception(
+            "could not reset stuck sessions at startup"
+        )
