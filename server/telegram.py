@@ -190,18 +190,26 @@ Below is the recent conversation with this user, including solutions you deliver
 for screen captures. The user asks a follow-up question (typed or spoken).
 
 FIRST decide the intent:
-A) The user asks for a CODE CHANGE or new implementation ("add X", "change it to Y",
-   "make it handle Z", "rewrite using W").
-B) Anything else — an explanation, a conceptual question, a complexity question, chat.
+A) The user asks to SOLVE a problem, or for a CODE CHANGE or new implementation
+   ("solve this", "add X", "change it to Y", "make it handle Z", "rewrite using W",
+   "write code for..."). ALWAYS pick A when code should be produced or changed —
+   even if the request is short or vague.
+B) Purely conceptual/explanatory questions with no code to produce.
 
-For case A, answer in the ADDITIVE live-coding tutor style:
-- Split the change into granular steps; each step introduces exactly ONE concept.
+For case A, answer in the ADDITIVE live-coding tutor style — steps are REQUIRED:
+- Split the work into granular steps; each step introduces exactly ONE concept.
 - Every step's explanation starts with WHY we do this before WHAT we add.
+- **Bold** the key terms in every explanation: function names, data structures,
+  algorithms, and any O(...) complexity (e.g. **hash map**, **O(n)**, **recursion**).
 - Each step's code block contains the ENTIRE code accumulated so far (previous
   steps + this step's addition, new part marked with a short comment).
 - The final code block is the complete, clean, runnable version (no narration comments).
 
-For case B, just answer concisely and do not use step markers.
+For case B, answer concisely but still format nicely: use **bold** for key terms
+and ``` code fences for any code snippet.
+
+Markdown formatting (**bold**, *italic*, `inline code`, ``` fences) is supported
+everywhere in your reply and will be rendered — use it generously.
 
 Output format (STRICT — these markers are machine-parsed):
 - Always start with exactly one line: <<<MODE:STEPS>>> or <<<MODE:TEXT>>>
@@ -237,18 +245,87 @@ follow-up is a request to SOLVE or MODIFY code, answer in the additive stepped
 style; ground every step in what is actually visible in the images."""
 
 
+_MD_CODE_RE = re.compile(r"```[a-zA-Z0-9_+-]*[ \t]*\n(.*?)```", re.DOTALL)
+
+
+def markdown_to_telegram_html(text: str) -> str:
+    """Convert a model's Markdown reply to Telegram-safe HTML.
+
+    Order matters: extract fenced code first (its content must NOT be
+    markdown-converted), then inline code, then bold/italic, then escape
+    what's left. All text/code content is html.escape()d before tags wrap it,
+    so raw < > & in answers can't break Telegram's HTML parser.
+    """
+    e = html.escape
+
+    # 1. fenced code blocks -> <pre> (content escaped ONCE, left untouched otherwise)
+    placeholders: list[str] = []
+
+    def _stash_code(m: re.Match) -> str:
+        code = m.group(1).rstrip()
+        # raw markdown: & < > are all literal characters — escape fully
+        code = e(code)
+        placeholders.append(f"<pre>{code}</pre>")
+        return f"\x00CODE{len(placeholders) - 1}\x00"
+
+    out = _MD_CODE_RE.sub(_stash_code, text)
+
+    # 2. inline code `x` -> <code> (content escaped, backticks removed)
+    def _stash_inline(m: re.Match) -> str:
+        placeholders.append("<code>" + e(m.group(1)) + "</code>")
+        return f"\x00INLINE{len(placeholders) - 1}\x00"
+
+    out = re.sub(r"`([^`\n]+)`", _stash_inline, out)
+
+    # 3. bold / italic on remaining text
+    out = re.sub(r"\*\*\*(.+?)\*\*\*", r"<b><i>\1</i></b>", out, flags=re.DOTALL)
+    out = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", out, flags=re.DOTALL)
+    out = re.sub(r"(?<![\w*])\*([^*\n]+?)\*(?![\w*])", r"<i>\1</i>", out)
+    out = re.sub(r"(?<![\w*_])__(.+?)__(?![\w_])", r"<b>\1</b>", out, flags=re.DOTALL)
+    out = re.sub(r"(?<![\w_])_([^_\n]+?)_(?![\w_])", r"<i>\1</i>", out)
+
+    # 4. markdown headings / bullets -> friendly plain-ish formatting
+    out = re.sub(r"(?m)^#{1,6}\s*(.+)$", r"<b>\1</b>", out)
+    out = re.sub(r"(?m)^\s*[-*]\s+", "• ", out)
+    out = re.sub(r"(?m)^\s*\d+\.\s+", lambda m: m.group(0), out)
+
+    # 5. escape stray angle brackets in prose. Everything in `out` now is a mix
+    # of (a) our own whitelisted tags, (b) stashed placeholders, (c) raw user
+    # text that may contain < >. Protect (a) and (b), escape the rest.
+    PROTECT = re.compile(
+        r"</?(?:b|i|u|s|code|pre)>|\x00(?:CODE|INLINE)\d+\x00"
+    )
+    pieces = PROTECT.split(out)
+    keepers = PROTECT.findall(out)
+    rebuilt: list[str] = []
+    for idx, chunk in enumerate(pieces):
+        rebuilt.append(e(chunk))
+        if idx < len(keepers):
+            rebuilt.append(keepers[idx])
+    out = "".join(rebuilt)
+
+    # 6. restore stashed code blocks (already fully escaped + wrapped)
+    out = re.sub(
+        r"\x00CODE(\d+)\x00", lambda m: placeholders[int(m.group(1))], out
+    )
+    out = re.sub(
+        r"\x00INLINE(\d+)\x00", lambda m: placeholders[int(m.group(1))], out
+    )
+    return out.strip()
+
+
 def _format_stepped_followup(steps: list[dict], final_code: str | None) -> str:
     e = html.escape
     parts = ["<b>🛠 Updated solution — building it up:</b>"]
     for i, s in enumerate(steps, 1):
-        text = e(s.get("step") or "")
+        text = markdown_to_telegram_html(s.get("step") or "")
         code = s.get("code")
         if code:
-            parts.append(f"<b>step {i}.</b> {text}\n<pre>{e(code)}</pre>")
+            parts.append(f"<b>🔹 Step {i}</b>\n{text}\n<pre>{e(code)}</pre>")
         else:
-            parts.append(f"<b>step {i}.</b> {text}")
+            parts.append(f"<b>🔹 Step {i}</b>\n{text}")
     if final_code:
-        parts.append("\n<b>Final code:</b>\n<pre>" + e(final_code) + "</pre>")
+        parts.append("\n<b>✅ Final code:</b>\n<pre>" + e(final_code) + "</pre>")
     return "\n\n".join(parts)
 
 
@@ -336,6 +413,8 @@ def answer_followup(question: str, image_parts: list[bytes] | None = None) -> st
         raise RuntimeError("No LLM configured for follow-up answers")
 
     mode, rendered = _parse_stepped_answer(raw)
+    if mode == "text":
+        rendered = markdown_to_telegram_html(rendered)
     return rendered
 
 
@@ -508,30 +587,29 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
 
 
 def format_solution(capture) -> str:
-    e = html.escape
     parts = ["<b>📸 ScreenSolve — new solution</b>"]
     if capture.problem_statement:
-        parts.append("\n<b>Problem:</b>\n" + e(capture.problem_statement))
+        parts.append("\n<b>📋 Problem:</b>\n" + markdown_to_telegram_html(capture.problem_statement))
     if capture.solution_steps:
         items = []
         for i, s in enumerate(capture.solution_steps):
             if isinstance(s, dict):
-                text = s.get("step") or ""
+                text = markdown_to_telegram_html(s.get("step") or "")
                 code = s.get("code")
                 if code:
-                    items.append(f"<b>step {i+1}.</b> {e(text)}\n<pre>{e(code)}</pre>")
+                    items.append(f"<b>🔹 Step {i+1}</b>\n{text}\n<pre>{html.escape(code)}</pre>")
                 else:
-                    items.append(f"<b>step {i+1}.</b> {e(text)}")
+                    items.append(f"<b>🔹 Step {i+1}</b>\n{text}")
             else:
-                items.append(f"<b>step {i+1}.</b> {e(str(s))}")
-        parts.append("\n<b>Approach (building up):</b>\n" + "\n\n".join(items))
+                items.append(f"<b>🔹 Step {i+1}</b>\n" + markdown_to_telegram_html(str(s)))
+        parts.append("\n<b>🧩 Approach (building up):</b>\n" + "\n\n".join(items))
     if capture.optimized_code:
-        parts.append("\n<b>Optimized code:</b>\n<pre>" + e(capture.optimized_code) + "</pre>")
+        parts.append("\n<b>✅ Optimized code:</b>\n<pre>" + html.escape(capture.optimized_code) + "</pre>")
     badges = [b for b in (capture.time_complexity, capture.space_complexity) if b]
     if badges:
-        parts.append("\n<b>Complexity:</b> " + " · ".join(e(b) for b in badges))
+        parts.append("\n<b>⚡ Complexity:</b> " + " · ".join(markdown_to_telegram_html(b) for b in badges))
     if capture.notes:
-        parts.append("\n<b>Feedback:</b>\n" + e(capture.notes))
+        parts.append("\n<b>💡 Feedback:</b>\n" + markdown_to_telegram_html(capture.notes))
     return "\n".join(parts)
 
 
