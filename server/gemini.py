@@ -161,15 +161,37 @@ nothing else — no markdown fences, no prose before or after, no explanation.
 Start your response with { and end it with }."""
 
 
+TEXT_ONLY_PREFIX = """The user's question arrives as TEXT (typed, or transcribed from a
+voice note) — there may be NO screenshot. Solve the stated problem exactly as you
+would a question read from a screen.
+
+User's question/problem:
+\"\"\"{question}\"\"\"
+
+"""
+
+
 def analyze_images_multi(image_parts: list[bytes], mime_type: str = "image/png",
                          extra_instruction: str | None = None) -> dict:
     """Analyze several screenshots (scroll parts) as ONE combined question.
 
-    extra_instruction: optional user instruction (e.g. a voice note like
-    "solve it with recursion") appended to the prompt so the solve follows it.
+    image_parts may be EMPTY — the solve then runs from text only
+    (extra_instruction carries the question text).
     """
     if not image_parts:
-        raise ValueError("no images")
+        if not (extra_instruction or "").strip():
+            raise ValueError("no images and no question text")
+        prompt = TEXT_ONLY_PREFIX.format(question=extra_instruction.strip()) + PROMPT
+        last_err = None
+        for attempt in range(3):
+            try:
+                return _analyze_multi_once([], mime_type,
+                                           prompt + (JSON_ONLY_SUFFIX if attempt == 1 else ""),
+                                           max_tokens=8192 if attempt < 2 else 16384)
+            except (ValueError, KeyError) as e:
+                last_err = e
+                continue
+        raise RuntimeError(f"The model could not produce a structured answer after 3 attempts ({last_err}).")
     instruction = ""
     if extra_instruction:
         instruction = (

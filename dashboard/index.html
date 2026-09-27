@@ -67,6 +67,7 @@ pre code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 .chat-bar button { background:rgba(79,140,255,.15); color:var(--accent); border:1px solid rgba(79,140,255,.4); border-radius:10px; width:42px; font-size:16px; cursor:pointer; flex-shrink:0; transition:background .15s; }
 .chat-bar button:hover { background:rgba(79,140,255,.28); }
 .chat-bar button.rec { background:rgba(231,76,60,.2); border-color:var(--err); color:var(--err); animation:pulse 1.2s infinite; }
+.chat-bar button.has { background:rgba(46,204,113,.2); border-color:var(--ok); color:var(--ok); }
 .chat-bar button:disabled { opacity:.5; cursor:default; }
 </style>
 </head>
@@ -83,7 +84,9 @@ pre code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
   <div class="chat-bar">
     <button id="newqbtn" title="End current question and start fresh (Q)">🆕</button>
     <button id="micbtn" title="Record voice">🎙</button>
-    <input id="chatin" type="text" placeholder="Ask a question… (e.g. how do I test this in Postman?)" autocomplete="off">
+    <button id="imgbtn" title="Attach an image">📎</button>
+    <input id="chatimg" type="file" accept="image/png,image/jpeg,image/webp" style="display:none">
+    <input id="chatin" type="text" placeholder="Ask anything — type, speak, or attach an image (or all three)…" autocomplete="off">
     <button id="chatsend" title="Send">➤</button>
   </div>
 </section>

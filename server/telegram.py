@@ -605,10 +605,43 @@ def recent_session_images(db, chat_id: str | None = None) -> list[bytes]:
 question_chat_id_holder: dict = {}
 
 
+def answer_question_with_image(question: str, image_bytes: bytes, chat_id: str) -> str:
+    """Solve ONE question given as image + optional text together (the mixed
+    input path). Uses the stepped tutor pipeline; stores the solution summary
+    in chat history for follow-ups."""
+    from server.gemini import analyze_images_multi
+
+    extra = question.strip() or None
+    result = analyze_images_multi([image_bytes], extra_instruction=extra)
+    if not result.get("has_question"):
+        return (
+            "🤔 I couldn't find a coding question in what you sent. "
+            "Try rephrasing, or capture the screen with the question visible."
+        )
+    # render the structured solution via the same formatter as the capture flow
+    class _Cap:  # minimal shape for format_solution
+        problem_statement = result.get("problem_statement")
+        solution_steps = result.get("solution_steps")
+        optimized_code = result.get("optimized_code")
+        time_complexity = result.get("time_complexity")
+        space_complexity = result.get("space_complexity")
+        notes = result.get("notes")
+
+    rendered = format_solution(_Cap())
+    chat_history.add(
+        chat_id, "assistant",
+        f"Solution (mixed input).\nProblem: {(result.get('problem_statement') or '')[:500]}\n"
+        f"Final code:\n{(result.get('optimized_code') or '')[:1500]}",
+    )
+    return rendered
+
+
 def answer_and_store(question: str, chat_id: str, include_images: bool = True) -> str:
     """Shared follow-up pipeline used by both the Telegram bot and the
     dashboard chat: store the question, answer with recent capture images as
-    context, store the answer, return the rendered text."""
+    context, store the answer, return the rendered text. The question may be
+    voice/text-only (no captures at all) — then it is solved directly as a
+    fresh question with images=[] unless current-session images exist."""
     question_chat_id_holder["chat_id"] = chat_id
     chat_history.add(chat_id, "user", question)
 

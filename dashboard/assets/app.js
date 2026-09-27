@@ -165,6 +165,37 @@ const chatlog = document.getElementById("chatlog");
 const chatin = document.getElementById("chatin");
 const chatsend = document.getElementById("chatsend");
 const micbtn = document.getElementById("micbtn");
+const imgbtn = document.getElementById("imgbtn");
+const chatimg = document.getElementById("chatimg");
+
+imgbtn.addEventListener("click", () => chatimg.click());
+chatimg.addEventListener("change", () => {
+  imgbtn.classList.toggle("has", !!chatimg.files[0]);
+  imgbtn.title = chatimg.files[0] ? "Image attached: " + chatimg.files[0].name : "Attach an image";
+});
+
+/* Mixed input: text + optional image in ONE request (/api/chat/mixed) */
+async function askMixed(text, imageFile) {
+  const label = esc(text || "") + (imageFile ? `<br>📎 ${esc(imageFile.name)}` : "");
+  addMsg("user", label);
+  const t = addMsg("bot typing", "Thinking…");
+  try {
+    const fd = new FormData();
+    if (text) fd.append("text", text);
+    if (imageFile) fd.append("image", imageFile, imageFile.name);
+    const r = await fetch("/api/chat/mixed", { method: "POST", body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || "request failed");
+    if (j.transcript) addMsg("user", "🎙 “" + esc(j.transcript) + "”");
+    t.classList.remove("typing");
+    t.innerHTML = renderAnswer(j.answer || "(empty answer)");
+    chatlog.scrollTop = chatlog.scrollHeight;
+    if (window.hljs) hljs.highlightAll();
+  } catch (e) {
+    t.classList.remove("typing");
+    t.innerHTML = "⚠️ " + esc(String(e.message || e));
+  }
+}
 
 function addMsg(cls, html) {
   const d = document.createElement("div");
@@ -231,9 +262,13 @@ async function askVoice(blob) {
 
 chatsend.addEventListener("click", () => {
   const v = chatin.value.trim();
-  if (!v || chatsend.disabled) return;
+  const img = chatimg.files[0];
+  if ((!v && !img) || chatsend.disabled) return;
   chatin.value = "";
-  ask(v);
+  chatimg.value = null;
+  imgbtn.classList.remove("has");
+  if (img) askMixed(v, img);
+  else ask(v);
 });
 chatin.addEventListener("keydown", e => {
   if (e.key === "Enter") chatsend.click();
