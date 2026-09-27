@@ -161,7 +161,13 @@ def send_message(chat_id: str, text: str) -> bool:
         body = chunk if len(chunks) == 1 else f"{chunk}\n\n<i>— {n}/{len(chunks)} —</i>"
         ok = _call("sendMessage", chat_id=chat_id, text=body, parse_mode="HTML",
                    disable_web_page_preview=True)
-        ok_all = ok_all and bool(ok and ok.get("ok"))
+        if not (ok and ok.get("ok")):
+            ok_all = False
+            # surface WHY it failed (400 = bad HTML/parse, 403 = bot blocked,
+            # 401 = bad token) — silent False made delivery loss invisible
+            desc = (ok or {}).get("description") or "no response (bot disabled or network error)"
+            logging.getLogger("screensolve.telegram").warning(
+                "sendMessage to %s failed: %s", chat_id, desc)
     return ok_all
 
 
@@ -176,6 +182,9 @@ def send_photo(chat_id: str, png: bytes, caption: str | None = None) -> bool:
             data["parse_mode"] = "HTML"
         r = httpx.post(f"{API}{TELEGRAM_BOT_TOKEN}/sendPhoto",
                        data=data, files=files, timeout=60)
+        if r.status_code != 200 or not r.json().get("ok"):
+            logging.getLogger("screensolve.telegram").warning(
+                "sendPhoto failed: %s", (r.text or "")[:200])
         return r.status_code == 200 and r.json().get("ok")
     except Exception:
         return False

@@ -32,3 +32,10 @@ def run_startup_migrations() -> None:
                 conn.execute(text(
                     "ALTER TABLE capture_sessions ADD INDEX ix_capture_sessions_chat_id (chat_id)"
                 ))
+    if "captures" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("captures")}
+        if "image_type" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE captures ADD COLUMN image_type VARCHAR(32) NULL"
+                ))
