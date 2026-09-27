@@ -516,11 +516,19 @@ def _parse_stepped_answer(text: str) -> tuple[str, str]:
 
 
 def answer_followup(question: str, image_parts: list[bytes] | None = None) -> str:
-    history = chat_history.recent(question_chat_id_holder.get("chat_id", ""), limit=14)
+    chat_id = question_chat_id_holder.get("chat_id", "")
+    history = chat_history.recent(chat_id, limit=14)
     hist_text = "\n".join(
         f"[{m['role']}] {m['content'][:800]}" for m in history
     ) or "(none — no captures delivered to this chat yet)"
-    full = FOLLOWUP_PROMPT.format(history=hist_text, question=question)
+    # ground the answer in the user's indexed project structure (no-op when empty)
+    try:
+        from server import rag
+
+        structure = rag.context_block(chat_id, question)
+    except Exception:  # noqa: BLE001
+        structure = ""
+    full = FOLLOWUP_PROMPT.format(history=hist_text, question=question) + structure
     if image_parts:
         full += IMAGES_CONTEXT_SUFFIX
 
@@ -775,7 +783,18 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
                     and m["content"].strip().lower() not in ("c", "s", "q", "status")
                 ]
                 extra = " ".join(pending[-3:]).strip() or None
-                result = analyze_images_multi(images, extra_instruction=extra)
+                # ground the solve in the indexed project structure (no-op if none)
+                try:
+                    from server import rag as _rag
+
+                    _structure = _rag.context_block(
+                        chat_id, extra or "the captured question"
+                    )
+                except Exception:  # noqa: BLE001
+                    _structure = ""
+                result = analyze_images_multi(
+                    images, extra_instruction=(extra or "") + _structure or None
+                )
             except Exception as e:  # noqa: BLE001
                 sess.status = "open"  # allow retry
                 db.commit()
@@ -813,11 +832,37 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
             cap.time_complexity = result.get("time_complexity")
             cap.space_complexity = result.get("space_complexity")
             cap.notes = result.get("notes")
+            cap.image_type = (result.get("image_type") or "").strip().lower() or None
             db.add(cap)
             sess.status = "solved"
             sess.solved_at = now
             db.commit()
             db.refresh(cap)
+
+            # file-tree / file-content captures feed the project RAG index
+            img_type = (result.get("image_type") or "").strip().lower()
+            tree_entries = result.get("tree_entries") or []
+            if img_type in ("file_tree", "file_content") and tree_entries:
+                from server import rag
+
+                if img_type == "file_tree":
+                    n = rag.index_tree(chat_id, tree_entries, source=f"capture#{cap.id}")
+                    send_message(
+                        chat_id,
+                        f"🗂 Learned your project structure — indexed {n} file(s)/folder(s). "
+                        "Capture any file you want me to know, or just ask your question: "
+                        "answers will use this structure.",
+                    )
+                else:
+                    p = (tree_entries[0] or {}).get("path", "unknown.py")
+                    content = cap.user_attempt or ""
+                    ok = rag.index_file(chat_id, p, content)
+                    if ok:
+                        send_message(
+                            chat_id,
+                            f"📄 Indexed the contents of `{p}`. Show more files, or ask your question.",
+                        )
+                return
 
             # deliver: each part screenshot, then the solution
             for i, img in enumerate(images, 1):

@@ -31,6 +31,7 @@ class Capture(Base):
     space_complexity = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
+    image_type = Column(String(32), nullable=True)  # question|file_tree|file_content|other
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     analyzed_at = Column(DateTime, nullable=True)
 

@@ -9,4 +9,5 @@ google-genai
 httpx
 pyyaml
 python-dotenv
+chromadb
 faster-whisper

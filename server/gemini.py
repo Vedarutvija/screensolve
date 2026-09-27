@@ -22,6 +22,12 @@ Look at the screenshot and determine whether a clear coding question, programmin
 
 If there is genuinely NO coding-related content on screen (e.g. a blank desktop, social media, unrelated documents), set has_question=false. Otherwise has_question=true — even if the problem is only implied by a search query or error.
 
+IMAGE TYPE — set "image_type" to exactly one of:
+- "file_tree": the screen shows a project FILE TREE / directory structure (like an IDE explorer or a `tree` command output). Then fill "tree_entries" with EVERY file/folder you can read: [{"path": "exact/path/from/screen.py", "type": "file" or "dir", "note": "one-line guess of its purpose"}]. Set has_question=false UNLESS an actual question is also visible.
+- "file_content": the screen shows ONE file's source code or text content clearly (an editor view). Then set "tree_entries": [{"path": "best-guess/file/name.ext", "type": "file", "note": "first 120 chars of what the file contains"}] and also put a summary in "user_attempt".
+- "question": a coding problem/question, error, or code-related request — the normal solve path.
+- "other": anything else (has_question=false unless a question is visible).
+
 When has_question=true, solve it like a LIVE coding interview (TopTal style): think out loud, one small concept at a time, explaining WHY before writing anything.
 
 STRICT RULES for solution_steps:
@@ -34,7 +40,9 @@ STRICT RULES for solution_steps:
 
 Return ONLY a JSON object (no markdown fences) with exactly these keys:
 {
+  "image_type": "question" | "file_tree" | "file_content" | "other",
   "has_question": true/false,
+  "tree_entries": [{"path": "file/or/dir/path", "type": "file|dir", "note": "purpose or content summary, or null"}],
   "problem_statement": "clear restatement of the problem/question, or null",
   "user_attempt": "any partial code or working the user already wrote, verbatim, or null",
   "solution_steps": [
