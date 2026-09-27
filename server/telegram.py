@@ -2,6 +2,7 @@
 
 import base64
 import html
+import logging
 import os
 import re
 import threading
@@ -268,10 +269,23 @@ def transcribe(ogg_bytes: bytes) -> str:
 
     try:
         return _transcribe_local(wav_path)
-    except Exception:
-        if wav_path != ogg_path:
+    except Exception as e:
+        # local whisper can fail on cold HF Hub download (401/403/offline) —
+        # log it once and fall through to the gateway transcription
+        logging.getLogger("screensolve.telegram").warning(
+            "local whisper failed (%s) — falling back to gateway STT", str(e)[:120])
+        try:
             return _transcribe_gateway(ogg_path, "audio/ogg")
-        raise
+        except Exception as e2:  # noqa: BLE001
+            if wav_path != ogg_path:
+                try:
+                    return _transcribe_gateway(wav_path, "audio/wav")
+                except Exception as e3:  # noqa: BLE001
+                    raise RuntimeError(
+                        f"transcription unavailable (local: {str(e)[:80]}; "
+                        f"gateway: {str(e3)[:80]})"
+                    ) from e3
+            raise RuntimeError(f"transcription unavailable: {str(e2)[:120]}") from e2
 
 
 _local_model = None
@@ -325,23 +339,30 @@ C) TOOL / SETUP / WORKFLOW guidance — the user asks HOW to use, test, run, or 
    "how do I deploy this?", "how do I install/run it?").
 
 For case A, answer in the ADDITIVE live-coding tutor style — steps are REQUIRED:
-- Split the work into granular steps; each step introduces exactly ONE concept.
-- Every step's explanation starts with WHY we do this before WHAT we add.
+- Keep step explanations to ONE short line each (max ~15 words). No filler.
 - **Bold** the key terms in every explanation: function names, data structures,
   algorithms, and any O(...) complexity (e.g. **hash map**, **O(n)**, **recursion**).
 - Each step's code block contains the ENTIRE code accumulated so far (previous
   steps + this step's addition, new part marked with a short comment).
 - The final code block is the complete, clean, runnable version (no narration comments).
+- After the final code you MUST add a complexity line, exactly:
+  ⚡ **Time:** O(...) · **Space:** O(...)
 
 For case C, give CLICK-BY-CLICK tool steps the user can follow exactly:
 - Number each ACTION: what to open, what to click, what to select, what to type.
+- Keep each action to ONE short line; the payload fence carries the detail.
 - Under each action, give the EXACT payload for that step (URL, headers, JSON
   body, command) in a code fence — grounded in the captured problem/code when
   available (use its actual endpoint paths, parameter names, and values).
 - Cover the complete flow start to finish, including how to verify the result.
 
-For case B, answer concisely but still format nicely: use **bold** for key terms
+For case B, answer in AT MOST 3 short lines. Direct answer first, minimal
+explanation, no preamble, no restating the question. Use **bold** for key terms
 and ``` code fences for any code snippet.
+
+BREVITY RULE (all cases): the user wants scannable answers. Cut every sentence
+that doesn't teach or act. Never repeat the question back. Never add closing
+pleasantries ("Let me know if...").
 
 Markdown formatting (**bold**, *italic*, `inline code`, ``` fences) is supported
 everywhere in your reply and will be rendered — use it generously.
@@ -760,6 +781,15 @@ def answer_and_store(question: str, chat_id: str, include_images: bool = True) -
     voice/text-only (no captures at all) — then it is solved directly as a
     fresh question with images=[] unless current-session images exist."""
     question_chat_id_holder["chat_id"] = chat_id
+    # if the user just asked the identical question, don't re-answer
+    hist = chat_history.recent(chat_id, limit=2)
+    if (
+        len(hist) >= 2
+        and hist[-2]["role"] == "user"
+        and hist[-2]["content"].strip().lower() == question.strip().lower()
+        and hist[-1]["role"] == "assistant"
+    ):
+        return hist[-1]["content"]
     chat_history.add(chat_id, "user", question)
 
     def _run(with_imgs: bool) -> str:
@@ -796,21 +826,20 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
 
     db = SessionLocal()
     try:
-        if cmd == "q":
+        if cmd in ("q", "clear"):
             from server.routers.agent import reset_question_context
 
             result = reset_question_context(db, chat_id)
             if result["closed_sessions"]:
                 send_message(
                     chat_id,
-                    "✅ Question ended — context cleared. "
+                    "🧹 Memory cleared — question context wiped. "
                     "The next capture/question starts fresh.",
                 )
             else:
                 send_message(
                     chat_id,
-                    "✅ No open question — context cleared anyway. "
-                    "The next capture/question starts fresh.",
+                    "🧹 Memory cleared. The next capture/question starts fresh.",
                 )
             return
 
@@ -889,7 +918,7 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
                     m["content"] for m in chat_history.recent(chat_id, limit=10)
                     if m["role"] == "user"
                     and "🎙️" not in m["content"]
-                    and m["content"].strip().lower() not in ("c", "s", "q", "status")
+                    and m["content"].strip().lower() not in ("c", "s", "q", "clear", "status")
                 ]
                 extra = " ".join(pending[-3:]).strip() or None
                 # ground the solve in the indexed project structure (no-op if none)
@@ -1079,7 +1108,7 @@ def _handle_update(msg: dict, chat_id: str) -> None:
     voice = msg.get("voice") or msg.get("audio")
     text = (msg.get("text") or "").strip()
 
-    if text and text.strip().lower() in ("c", "s", "q", "status"):
+    if text and text.strip().lower() in ("c", "s", "q", "clear", "status"):
         _handle_session_command(text.strip().lower(), chat_id)
         return
 
@@ -1106,8 +1135,22 @@ def _handle_update(msg: dict, chat_id: str) -> None:
         return
 
     # follow-up question path — give the model the most recent
-    # captured session images (dataset/question parts) as context
-    send_message(chat_id, answer := answer_and_store(question, chat_id))
+    # captured session images (dataset/question parts) as context.
+    # Dedup guard: identical consecutive questions (Telegram retries a
+    # message after network hiccups) are answered once, not twice.
+    global _last_answer
+    key = (chat_id, question.strip().lower())
+    now = time.time()
+    if key == _last_answer.get("key") and now - _last_answer.get("ts", 0) < 60:
+        return
+    answer = answer_and_store(question, chat_id)
+    _last_answer = {"key": key, "ts": now}
+    send_message(chat_id, answer)
+
+
+# dedup state for follow-up answers (Telegram can redeliver a message after a
+# network retry, producing the same answer twice)
+_last_answer: dict = {}
 
 
 def _recent_images_safe(chat_id: str | None = None) -> list[bytes]:

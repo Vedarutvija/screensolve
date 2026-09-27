@@ -138,9 +138,9 @@ except Exception:
 
 @app.post("/api/session/new")
 def new_question_session(chat_id: str = DASHBOARD_CHAT_ID):
-    """\"Q\" command for the dashboard: end the current question's context —
-    close the open capture session and clear this chat's history so the next
-    capture/question starts fresh."""
+    """\"Q\" / \"clear\" command for the dashboard: end the current question's
+    context — close the open capture session and clear this chat's history so
+    the next capture/question starts fresh."""
     from server.database import SessionLocal
     from server.routers.agent import reset_question_context
 
