@@ -81,6 +81,22 @@ def send_photo(chat_id: str, png: bytes, caption: str | None = None) -> bool:
         return False
 
 
+def send_photo_url(chat_id: str, url: str, caption: str | None = None) -> bool:
+    """Send an image by URL (for real-world reference images in answers)."""
+    if not enabled():
+        return False
+    try:
+        data = {"chat_id": str(chat_id), "photo": url}
+        if caption:
+            data["caption"] = caption[:1024]
+            data["parse_mode"] = "HTML"
+        r = httpx.post(f"{API}{TELEGRAM_BOT_TOKEN}/sendPhoto",
+                       data=data, timeout=60)
+        return r.status_code == 200 and r.json().get("ok")
+    except Exception:
+        return False
+
+
 def link_chat(db, chat_id, title=None) -> None:
     from datetime import datetime, timezone
 
@@ -242,6 +258,9 @@ Output format (STRICT — these markers are machine-parsed):
 ```text
 <exact payload/URL/command for this step — omit this fence entirely if none>
 ```
+- In MODE:TOOL answers you MUST add an IMAGE line inside EXACTLY TWO steps (the two most visual ones — a screen, dashboard, dialog or button the user will see). Put it on its own line inside the step block, AFTER the detail fence:
+IMAGE: <2-5 word image search query for that UI, e.g. "postman new request screen" or "pinecone console dashboard">
+(NEVER skip this — every MODE:TOOL answer must contain exactly 2 IMAGE lines.)
 - For <<<MODE:TEXT>>>, write the plain answer right after the marker (Telegram HTML allowed: <b>, <code>, <pre>).
 
 Recent conversation:
@@ -352,21 +371,66 @@ def _format_stepped_followup(steps: list[dict], final_code: str | None) -> str:
     return "\n\n".join(parts)
 
 
+_img_cache: dict = {}  # query -> (timestamp, url)
+_IMG_TTL = 86400
+
+
+def search_image(query: str) -> str | None:
+    """Find one relevant real-world image URL for a UI/tool query via
+    DuckDuckGo. Cached; returns None on any failure — callers must treat the
+    image as optional."""
+    import time as _time
+
+    query = (query or "").strip()[:80]
+    if not query:
+        return None
+    hit = _img_cache.get(query)
+    if hit and _time.time() - hit[0] < _IMG_TTL:
+        return hit[1]
+    url = None
+    try:
+        from ddgs import DDGS
+
+        with DDGS() as d:
+            for r in d.images(query, max_results=5):
+                cand = (r.get("image") or "").strip()
+                if cand.startswith("http") and not cand.lower().endswith((".svg", ".gif")):
+                    url = cand
+                    break
+    except Exception:  # noqa: BLE001 — image is strictly optional
+        return None
+    if url:
+        _img_cache[query] = (_time.time(), url)
+    return url
+
+
 def _parse_tool_answer(body: str) -> str:
     """Render MODE:TOOL steps: each STEP is an action, optional DETAIL holds the
-    exact payload for that step. Falls back to cleaned raw text if malformed."""
+    exact payload for that step, optional IMAGE resolves to a real image link.
+    Falls back to cleaned raw text if malformed."""
     e = html.escape
     chunks = body.split("<<<STEP>>>")[1:]
     if not chunks:
         return body.replace("<<<", "").strip()
     parts = ["<b>🧪 How to do it — step by step:</b>"]
+    img_refs: list[str] = []  # (step_number, url) collected, rendered per step
     for i, chunk in enumerate(chunks, 1):
+        img_query = None
+        # IMAGE: line — model-suggested image search query; may appear anywhere
+        # in the step block (action, inside detail, or after the detail fence)
+        m = re.search(r"^\s*IMAGE:\s*(.+)$", chunk, re.MULTILINE)
+        if m:
+            img_query = m.group(1).strip()
+            chunk = re.sub(r"^\s*IMAGE:.*$\n?", "", chunk, flags=re.MULTILINE)
         if "<<<DETAIL>>>" in chunk:
             action, detail = chunk.split("<<<DETAIL>>>", 1)
             action = action.strip()
             detail = detail.strip()
         else:
             action, detail = chunk.strip(), ""
+        # IMAGE: may appear in the action OR the detail block — strip both
+        if "IMAGE:" in detail:
+            detail = re.sub(r"^\s*IMAGE:.*$\n?", "", detail, flags=re.MULTILINE).strip()
         action_html = markdown_to_telegram_html(action)
         if detail:
             fm = re.search(r"```[a-zA-Z0-9_+-]*[ \t]*\n(.*?)```", detail, re.DOTALL)
@@ -376,6 +440,11 @@ def _parse_tool_answer(body: str) -> str:
             )
         else:
             parts.append(f"<b>🔹 Step {i}</b>\n{action_html}")
+        if img_query:
+            url = search_image(img_query)
+            if url:
+                img_refs.append((i, url))
+                parts[-1] += f"\n[img:{url}]"
     return "\n\n".join(parts)
 
 
@@ -542,6 +611,11 @@ def answer_and_store(question: str, chat_id: str, include_images: bool = True) -
         imgs = _recent_images_safe() if with_imgs else []
         return answer_followup(question, imgs)
 
+    def _send_images(text: str) -> None:
+        # tool-guidance answers may carry [img:URL] refs — send them as photos
+        for m in re.findall(r"\[img:(https?://[^\]\s]+)\]", text)[:2]:
+            send_photo_url(chat_id, m, "from your answer steps")
+
     try:
         answer = _run(include_images)
     except Exception as e:  # noqa: BLE001
@@ -554,6 +628,8 @@ def answer_and_store(question: str, chat_id: str, include_images: bool = True) -
             except Exception as e2:  # noqa: BLE001
                 answer = f"⚠️ Couldn't answer that right now: {str(e2)[:150]}"
     chat_history.add(chat_id, "assistant", answer)
+    if "[img:" in answer:
+        _send_images(answer)
     return answer
 
 
