@@ -43,3 +43,21 @@ def recent(chat_id: str, limit: int = 10) -> list[dict]:
         return [{"role": r.role, "content": r.content} for r in reversed(rows)]
     finally:
         db.close()
+
+
+def clear(chat_id: str) -> int:
+    """Delete all history for one chat (used by the \"Q\" new-question reset).
+    Returns the number of removed rows."""
+    from server.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        n = (
+            db.query(ChatMessage)
+            .filter_by(chat_id=str(chat_id))
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return n
+    finally:
+        db.close()

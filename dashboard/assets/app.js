@@ -269,5 +269,27 @@ micbtn.addEventListener("click", async () => {
   chatsend.disabled = true;
 });
 
+/* New Question ("Q"): end current question context, start fresh */
+const newqbtn = document.getElementById("newqbtn");
+if (newqbtn) {
+  newqbtn.addEventListener("click", async () => {
+    newqbtn.disabled = true;
+    addMsg("user", "Q");
+    const t = addMsg("bot typing", "Clearing question context…");
+    try {
+      const r = await fetch("/api/session/new", { method: "POST" });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || "request failed");
+      t.classList.remove("typing");
+      t.innerHTML = "✅ Question ended — context cleared. Your next capture/question starts fresh.";
+    } catch (e) {
+      t.classList.remove("typing");
+      t.innerHTML = "⚠️ " + esc(String(e.message || e));
+    } finally {
+      newqbtn.disabled = false;
+    }
+  });
+}
+
 refresh();
 setInterval(refresh, 4000);

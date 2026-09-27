@@ -6,12 +6,18 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from server.database import Base, engine
+from server.database import Base, engine, run_startup_migrations
 from server.routers import agent as agent_router
 from server.routers import captures
 from server import telegram
 
 Base.metadata.create_all(bind=engine)
+try:
+    run_startup_migrations()
+except Exception:
+    import logging
+
+    logging.getLogger("screensolve").exception("startup migration failed")
 
 app = FastAPI(title="ScreenSolve", version="1.0.0")
 app.add_middleware(
@@ -68,6 +74,24 @@ async def dashboard_chat_voice(audio: UploadFile = File(...)):
 
 
 telegram.start_bot()
+
+
+@app.post("/api/session/new")
+def new_question_session(chat_id: str = DASHBOARD_CHAT_ID):
+    """\"Q\" command for the dashboard: end the current question's context —
+    close the open capture session and clear this chat's history so the next
+    capture/question starts fresh."""
+    from server.database import SessionLocal
+    from server.routers.agent import reset_question_context
+
+    db = SessionLocal()
+    try:
+        result = reset_question_context(db, chat_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"reset failed: {str(e)[:180]}")
+    finally:
+        db.close()
+    return result
 
 
 DASH = Path(__file__).resolve().parent.parent / "dashboard"

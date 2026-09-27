@@ -46,10 +46,17 @@ def command_pending(agent_id: str = "default") -> bool:
         return True
 
 
-def open_session(db: Session) -> CaptureSession:
-    sess = db.query(CaptureSession).filter_by(status="open").first()
+def open_session(db: Session, chat_id: str = "dashboard") -> CaptureSession:
+    """Return (or create) the open session owned by this chat. Sessions are
+    per-chat so one chat's question never shares parts with another's — and a
+    session closed by the \"Q\" command is never reused."""
+    sess = (
+        db.query(CaptureSession)
+        .filter_by(status="open", chat_id=str(chat_id))
+        .first()
+    )
     if not sess:
-        sess = CaptureSession(status="open")
+        sess = CaptureSession(status="open", chat_id=str(chat_id))
         db.add(sess)
         db.commit()
         db.refresh(sess)
@@ -91,7 +98,7 @@ async def agent_capture(
     path = os.path.join(UPLOAD_DIR, name)
     img.save(path, "PNG")
 
-    sess = open_session(db)
+    sess = open_session(db, "dashboard")
     cap = Capture(image_path=path, status="captured", session_id=sess.id)
     db.add(cap)
     db.commit()
@@ -123,8 +130,34 @@ def _part_count(db: Session, session_id: int) -> int:
     return db.query(Capture).filter_by(session_id=session_id, status="captured").count()
 
 
-def get_open_session(db: Session) -> CaptureSession | None:
-    return db.query(CaptureSession).filter_by(status="open").first()
+def get_open_session(db: Session, chat_id: str = "dashboard") -> CaptureSession | None:
+    return (
+        db.query(CaptureSession)
+        .filter_by(status="open", chat_id=str(chat_id))
+        .first()
+    )
+
+
+def reset_question_context(db: Session, chat_id: str = "dashboard") -> dict:
+    """\"Q\" command: end the current question's context. Closes any open /
+    stuck-solving session owned by this chat and clears that chat's history so
+    the next capture/question starts genuinely fresh. Closed sessions are
+    never reopened and their images are never attached to future answers."""
+    from server import chat_history
+
+    closed = 0
+    sessions = (
+        db.query(CaptureSession)
+        .filter(CaptureSession.chat_id == str(chat_id))
+        .filter(CaptureSession.status.in_(("open", "solving")))
+        .all()
+    )
+    for s in sessions:
+        s.status = "closed"
+        closed += 1
+    db.commit()
+    cleared = chat_history.clear(chat_id)
+    return {"chat_id": str(chat_id), "closed_sessions": closed, "cleared_messages": cleared}
 
 
 def session_images(db: Session, session_id: int) -> list[bytes]:

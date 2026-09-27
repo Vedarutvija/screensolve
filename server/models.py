@@ -10,7 +10,8 @@ class CaptureSession(Base):
     __tablename__ = "capture_sessions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    status = Column(String(32), default="open", index=True)  # open|solving|solved
+    chat_id = Column(String(64), default="dashboard", index=True)  # owner chat
+    status = Column(String(32), default="open", index=True)  # open|solving|solved|closed
     created_at = Column(DateTime, default=datetime.utcnow)
     solved_at = Column(DateTime, nullable=True)
 

@@ -568,13 +568,18 @@ def answer_followup(question: str, image_parts: list[bytes] | None = None) -> st
     return rendered
 
 
-def recent_session_images(db) -> list[bytes]:
+def recent_session_images(db, chat_id: str | None = None) -> list[bytes]:
     """Images from the most recently active capture session (any status with
-    captured parts) — used to give voice/text follow-ups visual context."""
+    captured parts) — used to give voice/text follow-ups visual context.
+    Scoped to the asking chat, and CLOSED sessions are skipped so a previous
+    question's screenshots never leak into the next one (the \"Q\" reset)."""
     from server.models import Capture, CaptureSession
 
+    q = db.query(CaptureSession)
+    if chat_id is not None:
+        q = q.filter(CaptureSession.chat_id == str(chat_id))
     sess_ids = [
-        s.id for s in db.query(CaptureSession)
+        s.id for s in q.filter(CaptureSession.status != "closed")
         .order_by(CaptureSession.id.desc()).limit(10).all()
     ]
     for sid in sess_ids:
@@ -608,7 +613,7 @@ def answer_and_store(question: str, chat_id: str, include_images: bool = True) -
     chat_history.add(chat_id, "user", question)
 
     def _run(with_imgs: bool) -> str:
-        imgs = _recent_images_safe() if with_imgs else []
+        imgs = _recent_images_safe(question_chat_id_holder.get("chat_id")) if with_imgs else []
         return answer_followup(question, imgs)
 
     def _send_images(text: str) -> None:
@@ -641,6 +646,24 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
 
     db = SessionLocal()
     try:
+        if cmd == "q":
+            from server.routers.agent import reset_question_context
+
+            result = reset_question_context(db, chat_id)
+            if result["closed_sessions"]:
+                send_message(
+                    chat_id,
+                    "✅ Question ended — context cleared. "
+                    "The next capture/question starts fresh.",
+                )
+            else:
+                send_message(
+                    chat_id,
+                    "✅ No open question — context cleared anyway. "
+                    "The next capture/question starts fresh.",
+                )
+            return
+
         if cmd == "c":
             agent_api.issue_capture_command()
             # wait for the agent to upload a NEW part (id must increase past
@@ -681,7 +704,11 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
                 )
 
         elif cmd == "s":
-            sess = db.query(CaptureSession).filter_by(status="open").first()
+            sess = (
+                db.query(CaptureSession)
+                .filter_by(status="open", chat_id=str(chat_id))
+                .first()
+            )
             if not sess:
                 # maybe the session was already solved/cleared — check for any
                 # recently captured parts and tell the truth
@@ -712,7 +739,7 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
                     m["content"] for m in chat_history.recent(chat_id, limit=10)
                     if m["role"] == "user"
                     and "🎙️" not in m["content"]
-                    and m["content"].strip().lower() not in ("c", "s", "status")
+                    and m["content"].strip().lower() not in ("c", "s", "q", "status")
                 ]
                 extra = " ".join(pending[-3:]).strip() or None
                 result = analyze_images_multi(images, extra_instruction=extra)
@@ -771,12 +798,16 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
             chat_history.add(chat_id, "assistant", _hist_summary)
 
         elif cmd == "status":
-            sess = db.query(CaptureSession).filter_by(status="open").first()
+            sess = (
+                db.query(CaptureSession)
+                .filter_by(status="open", chat_id=str(chat_id))
+                .first()
+            )
             if not sess:
-                send_message(chat_id, "No open session. Send c to start capturing.")
+                send_message(chat_id, "No open session. Send c to start capturing, or Q to end the current question.")
             else:
                 parts = db.query(Capture).filter_by(session_id=sess.id, status="captured").count()
-                send_message(chat_id, f"Open session: {parts} part(s) captured. c = add part, s = solve.")
+                send_message(chat_id, f"Open session: {parts} part(s) captured. c = add part, s = solve, Q = end this question.")
     finally:
         db.close()
 
@@ -859,7 +890,7 @@ def _handle_update(msg: dict, chat_id: str) -> None:
     voice = msg.get("voice") or msg.get("audio")
     text = (msg.get("text") or "").strip()
 
-    if text and text.strip().lower() in ("c", "s", "status"):
+    if text and text.strip().lower() in ("c", "s", "q", "status"):
         _handle_session_command(text.strip().lower(), chat_id)
         return
 
@@ -890,13 +921,13 @@ def _handle_update(msg: dict, chat_id: str) -> None:
     send_message(chat_id, answer := answer_and_store(question, chat_id))
 
 
-def _recent_images_safe() -> list[bytes]:
+def _recent_images_safe(chat_id: str | None = None) -> list[bytes]:
     from server.database import SessionLocal
 
     try:
         db = SessionLocal()
         try:
-            return recent_session_images(db)
+            return recent_session_images(db, chat_id)
         finally:
             db.close()
     except Exception:  # noqa: BLE001
