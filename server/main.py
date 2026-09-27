@@ -1,3 +1,5 @@
+import logging
+
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -123,6 +125,15 @@ async def dashboard_chat_mixed(
 
 
 telegram.start_bot()
+
+# forward WARNING+ server logs to linked Telegram chats (rate-limited;
+# disable with LOGS_TO_TELEGRAM=0)
+try:
+    from server import log_forwarder
+
+    log_forwarder.attach()
+except Exception:
+    logging.getLogger("screensolve").exception("could not attach telegram log forwarder")
 
 
 @app.post("/api/session/new")

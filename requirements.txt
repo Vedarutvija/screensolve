@@ -10,4 +10,5 @@ httpx
 pyyaml
 python-dotenv
 chromadb
+# (LOGS_TO_TELEGRAM=0 disables the Telegram log forwarder)
 faster-whisper
