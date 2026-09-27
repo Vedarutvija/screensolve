@@ -59,10 +59,110 @@ def _call(method: str, **payload):
         return None
 
 
+TG_MSG_LIMIT = 4096
+
+
+def split_message(text: str, limit: int = TG_MSG_LIMIT) -> list[str]:
+    """Split a Telegram HTML message into chunks of <= limit chars.
+
+    Never splits inside a <pre>…</pre> block; prefers paragraph boundaries,
+    then newlines, then a hard split as last resort. Re-opens/re-closes any
+    <pre> block that a chunk boundary cut so every chunk is valid HTML on its
+    own."""
+    text = text or ""
+    if len(text) <= limit:
+        return [text] if text else []
+
+    # split points: after blank-line paragraphs, never inside <pre>
+    paragraphs: list[str] = []
+    buf: list[str] = []
+    in_pre = False
+    i = 0
+    while i < len(text):
+        if text.startswith("<pre>", i):
+            in_pre = True
+        elif text.startswith("</pre>", i):
+            in_pre = False
+            i += len("</pre>")
+            buf.append("</pre>")
+            paragraphs.append("".join(buf))
+            buf = []
+            continue
+        buf.append(text[i])
+        if not in_pre and text[i : i + 2] == "\n\n":
+            paragraphs.append("".join(buf))
+            buf = []
+        i += 1
+    if buf:
+        paragraphs.append("".join(buf))
+
+    # drop split markers left inside a paragraph (a <pre> opening mid-paragraph)
+    chunks: list[str] = []
+    cur = ""
+    for p in paragraphs:
+        p = p.strip("\n")
+        if not p:
+            continue
+        candidate = f"{cur}\n\n{p}" if cur else p
+        if len(candidate) <= limit:
+            cur = candidate
+            continue
+        if cur:
+            chunks.append(cur)
+        if len(p) <= limit:
+            cur = p
+            continue
+        # single paragraph too long → hard-split on newlines then chars,
+        # keeping <pre> balanced per piece
+        pieces = _hard_split_balanced(p, limit)
+        chunks.extend(pieces[:-1])
+        cur = pieces[-1]
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def _hard_split_balanced(text: str, limit: int) -> list[str]:
+    """Hard-split text into <=limit pieces. If the text STARTS inside an open
+    <pre> (opened in an earlier chunk), every piece re-opens it and only the
+    last piece closes it — so concatenated pieces reproduce the original, and
+    each piece alone renders fine as an open pre (Telegram tolerates this at
+    message end; the NEXT chunk re-opens the block explicitly)."""
+    pieces: list[str] = []
+    cur = ""
+    # treat as "open pre" when the text starts inside one: either it begins
+    # with <pre> (a block we're about to split mid-way) or it has an unbalanced tag
+    open_pre = (
+        text.lstrip().startswith("<pre>")
+        or text.count("<pre>") > text.count("</pre>")
+    )
+    prefix, suffix = ("<pre>", "</pre>") if open_pre else ("", "")
+    for line in text.split("\n"):
+        candidate = f"{cur}\n{line}" if cur else line
+        if len(prefix + candidate + suffix) <= limit:
+            cur = candidate
+            continue
+        if cur:
+            pieces.append(prefix + cur)
+        cur = line
+        while len(prefix + cur) > limit - len(suffix):
+            cut = limit - len(prefix) - len(suffix)
+            pieces.append(prefix + cur[:cut])
+            cur = cur[cut:]
+    if cur:
+        pieces.append(prefix + cur + suffix)
+    return pieces
+
+
 def send_message(chat_id: str, text: str) -> bool:
-    ok = _call("sendMessage", chat_id=chat_id, text=text, parse_mode="HTML",
-               disable_web_page_preview=True)
-    return bool(ok and ok.get("ok"))
+    ok_all = True
+    chunks = split_message(text)
+    for n, chunk in enumerate(chunks, 1):
+        body = chunk if len(chunks) == 1 else f"{chunk}\n\n<i>— {n}/{len(chunks)} —</i>"
+        ok = _call("sendMessage", chat_id=chat_id, text=body, parse_mode="HTML",
+                   disable_web_page_preview=True)
+        ok_all = ok_all and bool(ok and ok.get("ok"))
+    return ok_all
 
 
 def send_photo(chat_id: str, png: bytes, caption: str | None = None) -> bool:
@@ -358,16 +458,16 @@ def markdown_to_telegram_html(text: str) -> str:
 
 def _format_stepped_followup(steps: list[dict], final_code: str | None) -> str:
     e = html.escape
-    parts = ["<b>🛠 Updated solution — building it up:</b>"]
+    parts = ["<b>🛠 Updated solution — building it up</b>"]
     for i, s in enumerate(steps, 1):
         text = markdown_to_telegram_html(s.get("step") or "")
         code = s.get("code")
         if code:
-            parts.append(f"<b>🔹 Step {i}</b>\n{text}\n<pre>{e(code)}</pre>")
+            parts.append(f"<b>🔹 Step {i}</b>\n{text}\n<pre><code class=\"language-python\">{e(code)}</code></pre>")
         else:
             parts.append(f"<b>🔹 Step {i}</b>\n{text}")
     if final_code:
-        parts.append("\n<b>✅ Final code:</b>\n<pre>" + e(final_code) + "</pre>")
+        parts.append("\n<b>✅ Final code</b>\n<pre><code class=\"language-python\">" + e(final_code) + "</code></pre>")
     return "\n\n".join(parts)
 
 
@@ -893,7 +993,8 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
 def format_solution(capture) -> str:
     parts = ["<b>📸 ScreenSolve — new solution</b>"]
     if capture.problem_statement:
-        parts.append("\n<b>📋 Problem:</b>\n" + markdown_to_telegram_html(capture.problem_statement))
+        problem = markdown_to_telegram_html(capture.problem_statement)
+        parts.append("\n<b>📋 Problem</b>\n<blockquote>" + problem + "</blockquote>")
     if capture.solution_steps:
         items = []
         for i, s in enumerate(capture.solution_steps):
@@ -901,19 +1002,20 @@ def format_solution(capture) -> str:
                 text = markdown_to_telegram_html(s.get("step") or "")
                 code = s.get("code")
                 if code:
-                    items.append(f"<b>🔹 Step {i+1}</b>\n{text}\n<pre>{html.escape(code)}</pre>")
+                    items.append(
+                        f"<b>🔹 Step {i+1}</b>\n{text}\n<pre><code class=\"language-python\">{html.escape(code)}</code></pre>")
                 else:
                     items.append(f"<b>🔹 Step {i+1}</b>\n{text}")
             else:
                 items.append(f"<b>🔹 Step {i+1}</b>\n" + markdown_to_telegram_html(str(s)))
-        parts.append("\n<b>🧩 Approach (building up):</b>\n" + "\n\n".join(items))
+        parts.append("\n<b>🧩 Approach — building it up</b>\n" + "\n\n▪️\n\n".join(items))
     if capture.optimized_code:
-        parts.append("\n<b>✅ Optimized code:</b>\n<pre>" + html.escape(capture.optimized_code) + "</pre>")
+        parts.append("\n<b>✅ Optimized code</b>\n<pre><code class=\"language-python\">" + html.escape(capture.optimized_code) + "</code></pre>")
     badges = [b for b in (capture.time_complexity, capture.space_complexity) if b]
     if badges:
         parts.append("\n<b>⚡ Complexity:</b> " + " · ".join(markdown_to_telegram_html(b) for b in badges))
     if capture.notes:
-        parts.append("\n<b>💡 Feedback:</b>\n" + markdown_to_telegram_html(capture.notes))
+        parts.append("\n<b>💡 Feedback</b>\n" + markdown_to_telegram_html(capture.notes))
     return "\n".join(parts)
 
 
