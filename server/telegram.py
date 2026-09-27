@@ -844,7 +844,8 @@ def _handle_session_command(cmd: str, chat_id: str) -> None:
             return
 
         if cmd == "c":
-            agent_api.issue_capture_command()
+            # attribute the upcoming capture to THIS chat, not "dashboard"
+            agent_api.issue_capture_command(chat_id=chat_id)
             # wait for the agent to upload a NEW part (id must increase past
             # whatever existed when the command was issued)
             import time as _time

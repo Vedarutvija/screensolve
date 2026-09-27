@@ -25,10 +25,21 @@ MAX_DIM = 1600
 ALLOWED = {"image/png", "image/jpeg", "image/webp"}
 
 
-def issue_capture_command(agent_id: str = "default") -> bool:
+def issue_capture_command(agent_id: str = "default", chat_id: str = "dashboard") -> bool:
     with _lock:
-        _pending[agent_id] = {"command": "capture", "issued_at": datetime.utcnow().timestamp()}
+        _pending[agent_id] = {
+            "command": "capture",
+            "issued_at": datetime.utcnow().timestamp(),
+            "chat_id": str(chat_id),  # the chat that asked for this capture
+        }
     return True
+
+
+def pending_chat_id(agent_id: str = "default") -> str:
+    """Chat that issued the currently pending capture command (dashboard default)."""
+    with _lock:
+        entry = _pending.get(agent_id)
+        return (entry or {}).get("chat_id", "dashboard")
 
 
 COMMAND_TTL = 20  # seconds before an unclaimed command expires
@@ -98,7 +109,7 @@ async def agent_capture(
     path = os.path.join(UPLOAD_DIR, name)
     img.save(path, "PNG")
 
-    sess = open_session(db, "dashboard")
+    sess = open_session(db, pending_chat_id())
     cap = Capture(image_path=path, status="captured", session_id=sess.id)
     db.add(cap)
     db.commit()
